@@ -9,9 +9,15 @@ import FluxCore
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
+    private let contextRuntime = MacOSContextRuntime()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        contextRuntime.start()
         installStatusItem()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        contextRuntime.stop()
     }
 
     private func installStatusItem() {

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+for argument in "$@"; do
+    if [[ "$argument" == "--show-bin-path" ]]; then
+        printf '%s\n' "$FLUX_TEST_BIN_DIR"
+        exit 0
+    fi
+done
+
+exit 0

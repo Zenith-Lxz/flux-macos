@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_DIR="${@: -1}"
+
+for argument in "$@"; do
+    if [[ "$argument" == "--force" ]]; then
+        touch "$APP_DIR/.provider-metadata"
+        exit 0
+    fi
+done
+
+for argument in "$@"; do
+    if [[ "$argument" == "--verify" ]]; then
+        if [[ -e "$APP_DIR/.provider-metadata" ]]; then
+            echo "simulated file-provider metadata rejected" >&2
+            exit 1
+        fi
+        exit 0
+    fi
+done
+
+if [[ "${1:-}" == "-d" ]]; then
+    echo 'designated => identifier "com.zenith.flux"'
+fi

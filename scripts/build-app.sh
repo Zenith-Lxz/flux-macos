@@ -87,6 +87,11 @@ else
     SIGNING_METHOD="ad-hoc"
 fi
 
+# The file provider can re-tag the bundle after signing. Remove those
+# attributes before the first strict verification; otherwise the verifier
+# rejects FinderInfo/fpfs metadata before the later cleanup can run.
+xattr -cr "$APP_DIR" 2>/dev/null || true
+
 echo "==> Verifying signature"
 codesign --verify --deep --strict "$APP_DIR"
 codesign -d -r - "$APP_DIR" 2>/dev/null | sed 's/^/designated requirement: /'

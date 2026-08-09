@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" == "-cr" ]]; then
+    APP_DIR="${2:?missing app bundle path}"
+    find "$APP_DIR" -name .provider-metadata -delete
+    exit 0
+fi
+
+exec /usr/bin/xattr "$@"

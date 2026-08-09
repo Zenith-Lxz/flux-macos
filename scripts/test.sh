@@ -10,10 +10,12 @@ CLT_TESTING_FRAMEWORKS="/Library/Developer/CommandLineTools/Library/Developer/Fr
 
 if [[ -d "$CLT_TESTING_FRAMEWORKS/Testing.framework" ]] \
     && ! xcodebuild -version >/dev/null 2>&1; then
-    exec swift test \
+    swift test \
         -Xswiftc -F \
         -Xswiftc "$CLT_TESTING_FRAMEWORKS" \
         "$@"
+else
+    swift test "$@"
 fi
 
-exec swift test "$@"
+bash "$ROOT_DIR/Tests/ScriptTests/BuildAppFileProviderTests.sh"

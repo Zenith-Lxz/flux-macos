@@ -29,6 +29,15 @@ struct AppRuntimeStatusTests {
         ) == .contextReturnFailed)
     }
 
+    @Test func pauseWinsOverTransientContextReturnFailure() {
+        #expect(AppRuntimeStatus.resolve(
+            permissionReady: true,
+            inputEngineRunning: true,
+            paused: true,
+            contextReturnFailed: true
+        ) == .paused)
+    }
+
     @Test func pauseRequiresARunningEngine() {
         #expect(AppRuntimeStatus.resolve(
             permissionReady: true,

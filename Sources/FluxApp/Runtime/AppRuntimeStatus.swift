@@ -20,7 +20,7 @@ enum AppRuntimeStatus: Sendable, Equatable {
     ) -> AppRuntimeStatus {
         guard permissionReady else { return .permissionsNeeded }
         guard inputEngineRunning else { return .listeningFailed }
-        if contextReturnFailed { return .contextReturnFailed }
-        return paused ? .paused : .running
+        if paused { return .paused }
+        return contextReturnFailed ? .contextReturnFailed : .running
     }
 }

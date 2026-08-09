@@ -75,6 +75,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         inputEngine.onPauseStateChange = { [weak self] _ in
             self?.pauseStateDidChange()
         }
+        inputEngine.onListeningFailure = { [weak self] in
+            self?.inputEngineListeningDidFail()
+        }
         refreshPermissionState()
         refreshLoginItemState()
         presentOnboardingIfNeeded()
@@ -230,6 +233,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard !startFailureLogged else { return }
         startFailureLogged = true
         NSLog("Flux: input engine failed to start; keyboard listening is unavailable")
+    }
+
+    private func inputEngineListeningDidFail() {
+        updateStatusItem(snapshot: permissionController.snapshot())
+        updatePauseMenuItem()
+        refreshSettingsWindow()
     }
 
     /// Polls the permission snapshot while it is not ready. The timer is

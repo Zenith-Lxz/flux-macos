@@ -50,15 +50,23 @@ final class MacOSGlobalInputEngine {
 
     // MARK: - Lifecycle / pause
 
-    /// Whether the HID manager and the suppressing event tap are installed
-    /// and live. Read-only to callers; only `start()`/`stop()` mutate it.
-    private(set) var isRunning = false
+    /// Permission-free state machine for start/stop and disabled-tap recovery.
+    private var lifecycleState = EventTapLifecycleState()
+
+    /// Whether the HID manager and suppressing event tap are live.
+    var isRunning: Bool {
+        lifecycleState.isRunning
+    }
 
     /// Whether Flux input mapping is paused (design spec §8).
     private(set) var isPaused = false
 
     /// Invoked on the main actor whenever `isPaused` changes.
     var onPauseStateChange: ((Bool) -> Void)?
+
+    /// Invoked after a disabled event tap cannot be re-enabled and both input
+    /// resources have been scheduled for fail-closed teardown.
+    var onListeningFailure: (() -> Void)?
 
     // MARK: - Physical Caps capture
 
@@ -145,24 +153,29 @@ final class MacOSGlobalInputEngine {
     @discardableResult
     func start() -> Bool {
         guard !isRunning else { return true }
+        // A prior failed recovery clears the running bit synchronously and
+        // tears resources down on the next main-actor turn. Defensively clean
+        // any stale handles before a later explicit retry.
+        teardownEventTap()
+        teardownHIDManager()
         resetTransientState()
         guard installHIDManager() else { return false }
         guard installEventTap() else {
             teardownHIDManager()
             return false
         }
-        isRunning = true
+        lifecycleState.didStart()
         return true
     }
 
     /// Removes the event tap and the HID manager and resets every piece of
     /// transient state. Idempotent.
     func stop() {
-        guard isRunning else { return }
+        guard isRunning || eventTap != nil || hidManager != nil else { return }
+        lifecycleState.didStop()
         resetTransientState()
         teardownEventTap()
         teardownHIDManager()
-        isRunning = false
     }
 
     // MARK: - HID installation
@@ -314,8 +327,20 @@ final class MacOSGlobalInputEngine {
             // §7, §10: a lifecycle interruption must never leak a held key
             // or a stale suppression).
             resetTransientState()
+            let hasTap = eventTap != nil
+            var enabledAfterAttempt = false
             if let tap = eventTap {
                 CGEvent.tapEnable(tap: tap, enable: true)
+                enabledAfterAttempt = CGEvent.tapIsEnabled(tap: tap)
+            }
+            switch lifecycleState.reconcileRecovery(
+                hasTap: hasTap,
+                isEnabledAfterAttempt: enabledAfterAttempt
+            ) {
+            case .failedClosed:
+                scheduleFailedTapTeardown()
+            case .ignored, .recovered:
+                break
             }
             return nil
         default:
@@ -675,5 +700,21 @@ final class MacOSGlobalInputEngine {
         pointerController.resetMotion()
         lastRawCapsState = nil
         manualSuppressedKeys.removeAll()
+    }
+
+    /// Completes fail-closed recovery outside the CoreGraphics callback. The
+    /// lifecycle running bit was already cleared synchronously, so HID Caps
+    /// callbacks are inert while this main-actor task removes both resources.
+    private func scheduleFailedTapTeardown() {
+        NSLog("Flux: input engine: event tap re-enable failed; input mapping stopped")
+        Task { @MainActor [weak self] in
+            // A later explicit retry may have installed a fresh tap before
+            // this task runs. Never tear down newly recovered resources.
+            guard let self, !self.isRunning else { return }
+            self.teardownEventTap()
+            self.teardownHIDManager()
+            self.resetTransientState()
+            self.onListeningFailure?()
+        }
     }
 }

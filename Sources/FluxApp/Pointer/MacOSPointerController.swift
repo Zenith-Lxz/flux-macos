@@ -40,8 +40,22 @@ final class MacOSPointerController {
     /// `resetMotion()` clears it.
     private var motionState: PointerMotionState
 
-    init(profile: PointerMotionProfile = .default) {
+    /// The bounded Accessibility snapper (design spec §6). Constructed
+    /// eagerly, but it performs no AX work until the first non-repeat move
+    /// requests a snap point, so constructing the controller stays
+    /// permission-free and side-effect-free.
+    private let snapper: any PointerSnapping
+
+    /// Generation of the latest pointer move. Every move advances it so a
+    /// queued snap from an older move can be discarded before it posts.
+    private var snapGeneration: UInt64 = 0
+
+    init(
+        profile: PointerMotionProfile = .default,
+        snapper: any PointerSnapping = MacOSPointerSnapper()
+    ) {
         self.motionState = PointerMotionState(profile: profile)
+        self.snapper = snapper
     }
 
     /// Moves the pointer one logical step in `direction`.
@@ -49,9 +63,11 @@ final class MacOSPointerController {
     /// Reads the current cursor location, advances `motionState` for the
     /// event (tiered acceleration is FluxCore's job, not this type's),
     /// flips the vertical component for Quartz's +Y-down screen space, and
-    /// posts one `.mouseMoved` event to `.cghidEventTap`. Returns false
-    /// when the current location or the move event cannot be created; the
-    /// motion state is still advanced by the attempted event.
+    /// immediately posts the geometric `.mouseMoved` event. A non-repeat
+    /// may later post one corrective snapped move outside the event-tap
+    /// callback. Returns false when the current location or geometric move
+    /// event cannot be created; the motion state is still advanced by the
+    /// attempted event.
     @discardableResult
     func move(
         direction: Direction,
@@ -68,10 +84,55 @@ final class MacOSPointerController {
         )
         // Flux logical coordinates are +Y up; Quartz screen coordinates are
         // +Y down, so the vertical component is negated (design spec §6).
-        let target = CGPoint(
+        let geometricTarget = CGPoint(
             x: current.location.x + delta.dx,
             y: current.location.y - delta.dy
         )
+        guard postMouseMove(at: geometricTarget) else { return false }
+        scheduleSnap(for: geometricTarget, isRepeat: isRepeat)
+        return true
+    }
+
+    /// Returns a snap destination for one pointer move, or nil when the move
+    /// must remain geometric (design spec §6).
+    ///
+    /// Auto-repeat never snaps: a held direction keeps pure tiered
+    /// acceleration so it cannot get trapped snapping back to the same
+    /// control. A non-repeat move asks the snapper for a nearby interactive
+    /// AX target and adopts its point when one is returned; any failure
+    /// falls back to the original geometric point, so pointer output is
+    /// never blocked by the probe.
+    internal func snapTarget(
+        geometricTarget: CGPoint,
+        isRepeat: Bool
+    ) -> CGPoint? {
+        guard !isRepeat else { return nil }
+        return snapper.snapPoint(for: geometricTarget)
+    }
+
+    /// Schedules the AX probe after the event-tap callback can return. The
+    /// geometric move has already been posted, so AX latency can never block
+    /// the basic pointer output. Repeats only advance the generation, which
+    /// cancels any older queued snap and preserves acceleration.
+    private func scheduleSnap(for geometricTarget: CGPoint, isRepeat: Bool) {
+        snapGeneration &+= 1
+        let generation = snapGeneration
+        guard !isRepeat else { return }
+        Task { @MainActor [weak self] in
+            guard let self, self.snapGeneration == generation,
+                  let snapped = self.snapTarget(
+                    geometricTarget: geometricTarget,
+                    isRepeat: false
+                  ), self.snapGeneration == generation else {
+                return
+            }
+            _ = self.postMouseMove(at: snapped)
+        }
+    }
+
+    /// Posts one marked pointer move at `target`.
+    @discardableResult
+    private func postMouseMove(at target: CGPoint) -> Bool {
         guard let event = CGEvent(
             mouseEventSource: nil,
             mouseType: .mouseMoved,
@@ -131,6 +192,7 @@ final class MacOSPointerController {
     /// Clears the motion sequence; the next move starts at the normal tier.
     func resetMotion() {
         motionState.reset()
+        snapGeneration &+= 1
     }
 
     /// A left-button press or release event with the click state and the

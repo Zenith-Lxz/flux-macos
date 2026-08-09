@@ -44,5 +44,15 @@ let package = Package(
                 ])
             ]
         ),
+        // AppKit-side lifecycle tests. The engine is constructed but never
+        // started, so no event tap or HID manager is installed and no
+        // permission prompt is triggered during tests.
+        .testTarget(
+            name: "FluxAppTests",
+            dependencies: ["FluxApp"],
+            swiftSettings: [
+                .unsafeFlags(["-F", cltFrameworks])
+            ]
+        ),
     ]
 )

@@ -50,7 +50,9 @@ final class MacOSGlobalInputEngine {
 
     // MARK: - Lifecycle / pause
 
-    private var isRunning = false
+    /// Whether the HID manager and the suppressing event tap are installed
+    /// and live. Read-only to callers; only `start()`/`stop()` mutate it.
+    private(set) var isRunning = false
 
     /// Whether Flux input mapping is paused (design spec §8).
     private(set) var isPaused = false
@@ -365,8 +367,8 @@ final class MacOSGlobalInputEngine {
             // Caps + Command + Escape (design spec §8); everything else
             // passes through unchanged.
             if lastRawCapsState == true, modifierTracker.modifiers.command, key == .escape {
-                togglePause()
-                // togglePause reset every manual suppression; record the
+                togglePaused()
+                // togglePaused reset every manual suppression; record the
                 // resume Escape so its matching keyUp stays suppressed.
                 manualSuppressedKeys.insert(.escape)
                 return nil
@@ -512,7 +514,7 @@ final class MacOSGlobalInputEngine {
             return nil
 
         case .togglePause:
-            togglePause()
+            togglePaused()
             return nil
         }
     }
@@ -603,10 +605,25 @@ final class MacOSGlobalInputEngine {
 
     // MARK: - Pause
 
-    /// Flips the pause state exactly once and resets transient state.
-    /// Invokes `onPauseStateChange` with the new state.
-    private func togglePause() {
-        isPaused.toggle()
+    /// Sets the paused state to `paused`. Idempotent: setting the
+    /// already-current state does nothing, so a real transition resets
+    /// transient state exactly once and invokes `onPauseStateChange`
+    /// exactly once. The menu and the pause/resume chord share this API.
+    func setPaused(_ paused: Bool) {
+        applyPauseState(paused)
+    }
+
+    /// Flips the paused state. A real transition behaves exactly like
+    /// `setPaused`.
+    func togglePaused() {
+        applyPauseState(!isPaused)
+    }
+
+    /// Applies one pause transition: flips the state, resets transient
+    /// state, and notifies observers exactly once per real state change.
+    private func applyPauseState(_ paused: Bool) {
+        guard paused != isPaused else { return }
+        isPaused = paused
         resetTransientState()
         onPauseStateChange?(isPaused)
     }

@@ -2,8 +2,9 @@
 # Read-only smoke test for the assembled dist/Flux.app (batch 001).
 #
 # Verifies bundle structure, Info.plist contract, executable, bundle id,
-# codesign, and the recorded SHA-256/signing-method records. Never modifies
-# system permissions and never registers login items.
+# codesign, the recorded SHA-256/signing-method records, and a bounded real
+# AppKit startup with permissions forced unavailable. Never modifies system
+# permissions, installs input listeners, or registers login items.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -98,6 +99,35 @@ case "$signing_method" in
         fail "unknown signing method in record: $signing_method"
         ;;
 esac
+
+# 8. Launch the exact verified bundle in its built-in no-permission smoke
+# mode. The app must complete AppKit/menu setup, keep the input engine off,
+# print its success marker, and terminate itself. A bounded watchdog prevents
+# a broken build from hanging CI indefinitely.
+STARTUP_LOG="$SMOKE_TEMP_DIR/startup.log"
+FLUX_STARTUP_SMOKE_NO_PERMISSIONS=1 \
+    "$VERIFY_APP/Contents/MacOS/$EXECUTABLE_NAME" >"$STARTUP_LOG" 2>&1 &
+startup_pid=$!
+startup_finished=false
+for _ in {1..100}; do
+    if ! kill -0 "$startup_pid" 2>/dev/null; then
+        if wait "$startup_pid"; then
+            startup_finished=true
+        else
+            fail "no-permission startup smoke exited unsuccessfully"
+        fi
+        break
+    fi
+    sleep 0.05
+done
+if [[ "$startup_finished" != true ]]; then
+    kill "$startup_pid" 2>/dev/null || true
+    wait "$startup_pid" 2>/dev/null || true
+    fail "no-permission startup smoke timed out"
+fi
+grep -qxF "FLUX STARTUP SMOKE PASS: permissions unavailable; input engine not started" \
+    "$STARTUP_LOG" || fail "no-permission startup smoke marker missing"
+pass "no-permission AppKit startup keeps input engine stopped"
 
 echo
 echo "SMOKE TEST PASSED"

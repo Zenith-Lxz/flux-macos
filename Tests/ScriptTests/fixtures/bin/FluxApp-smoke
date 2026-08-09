@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ "${FLUX_STARTUP_SMOKE_NO_PERMISSIONS:-}" == "1" ]]
+printf '%s\n' "FLUX STARTUP SMOKE PASS: permissions unavailable; input engine not started"

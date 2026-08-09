@@ -19,7 +19,7 @@ chmod +x "$TEST_DIR/scripts/"* "$TEST_DIR/fake-bin/"*
 
 export FLUX_TEST_BIN_DIR="$TEST_DIR/swift-bin"
 mkdir -p "$FLUX_TEST_BIN_DIR"
-cp /usr/bin/true "$FLUX_TEST_BIN_DIR/FluxApp"
+cp "$ROOT_DIR/Tests/ScriptTests/fixtures/bin/FluxApp-smoke" "$FLUX_TEST_BIN_DIR/FluxApp"
 
 PATH="$TEST_DIR/fake-bin:/usr/bin:/bin:/usr/sbin:/sbin" \
     "$TEST_DIR/scripts/build-app.sh" >/dev/null

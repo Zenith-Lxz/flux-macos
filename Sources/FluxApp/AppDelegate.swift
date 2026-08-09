@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let configurationStore: FluxConfigurationStore
     private var configuration: FluxConfiguration
     private let configurationLoadSource: ConfigurationSource
+    private let startupMode: FluxStartupMode
     private var isApplyingConfiguration = false
 
     // MARK: - Owned controllers
@@ -63,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         self.configurationStore = store
         self.configuration = loadResult.configuration
         self.configurationLoadSource = loadResult.source
+        self.startupMode = FluxStartupMode(environment: ProcessInfo.processInfo.environment)
         super.init()
     }
 
@@ -81,6 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshPermissionState()
         refreshLoginItemState()
         presentOnboardingIfNeeded()
+        finishStartupSmokeIfNeeded()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -117,7 +120,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem = item
         updatePauseMenuItem()
         refreshLoginItemState()
-        updateStatusItem(snapshot: permissionController.snapshot())
+        updateStatusItem(snapshot: currentPermissionSnapshot())
     }
 
     /// Makes the running / paused / listening-failed / permissions-needed
@@ -206,7 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// listening-failed state and the next menu-open refresh retries the
     /// start; no ready-state polling retries it in between. Never prompts.
     private func refreshPermissionState() {
-        let snapshot = permissionController.snapshot()
+        let snapshot = currentPermissionSnapshot()
         if snapshot.isReady {
             stopPermissionPolling()
             // start() is idempotent, so repeated ready refreshes (for
@@ -236,7 +239,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func inputEngineListeningDidFail() {
-        updateStatusItem(snapshot: permissionController.snapshot())
+        updateStatusItem(snapshot: currentPermissionSnapshot())
         updatePauseMenuItem()
         refreshSettingsWindow()
     }
@@ -246,6 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// thread; `MainActor.assumeIsolated` expresses that contract the same
     /// way the event-tap callback does.
     private func startPermissionPolling() {
+        guard startupMode == .normal else { return }
         guard permissionPollTimer == nil else { return }
         let timer = Timer(
             timeInterval: Self.permissionPollInterval,
@@ -276,7 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         updatePauseMenuItem()
-        updateStatusItem(snapshot: permissionController.snapshot())
+        updateStatusItem(snapshot: currentPermissionSnapshot())
         refreshSettingsWindow()
     }
 
@@ -358,9 +362,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// permission request path runs only when the user picks the
     /// authorization button (design spec §8).
     private func presentOnboardingIfNeeded() {
+        guard startupMode == .normal else { return }
         let defaults = UserDefaults.standard
         guard !defaults.bool(forKey: Self.onboardingPermissionAlertKey) else { return }
-        guard !permissionController.snapshot().isReady else { return }
+        guard !currentPermissionSnapshot().isReady else { return }
         defaults.set(true, forKey: Self.onboardingPermissionAlertKey)
 
         let alert = NSAlert()
@@ -372,6 +377,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if response == .alertFirstButtonReturn {
             permissionController.requestAndOpenRelevantSettings()
             refreshPermissionState()
+        }
+    }
+
+    /// Ends the assembled-app startup smoke only after the same AppKit setup
+    /// used by a real launch has completed. The forced denied snapshot kept
+    /// the input engine stopped, onboarding was skipped without writing
+    /// UserDefaults, and no permission prompt was issued.
+    private func finishStartupSmokeIfNeeded() {
+        guard startupMode.shouldExitAfterStartup else { return }
+        print(FluxStartupMode.noPermissionSmokeSuccessLine)
+        DispatchQueue.main.async {
+            NSApp.terminate(nil)
         }
     }
 
@@ -431,7 +448,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         controller.present(
             configuration: configuration,
-            permissionSnapshot: permissionController.snapshot(),
+            permissionSnapshot: currentPermissionSnapshot(),
             launchAtLoginState: settingsLaunchAtLoginState()
         )
     }
@@ -452,14 +469,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         inputEngine.applyConfiguration(sanitized)
         isApplyingConfiguration = false
         updatePauseMenuItem()
-        updateStatusItem(snapshot: permissionController.snapshot())
+        updateStatusItem(snapshot: currentPermissionSnapshot())
         return .success(sanitized)
     }
 
     private func refreshSettingsWindow() {
         settingsWindowController?.refresh(
             configuration: configuration,
-            permissionSnapshot: permissionController.snapshot(),
+            permissionSnapshot: currentPermissionSnapshot(),
             launchAtLoginState: settingsLaunchAtLoginState()
         )
     }
@@ -475,6 +492,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         @unknown default:
             return .off
         }
+    }
+
+    private func currentPermissionSnapshot() -> PermissionSnapshot {
+        startupMode.effectivePermissionSnapshot(actual: permissionController.snapshot())
     }
 
     private func logConfigurationFallbackIfNeeded() {

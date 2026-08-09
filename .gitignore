@@ -1,0 +1,10 @@
+.build/
+.worktrees/
+build/
+dist/
+DerivedData/
+*.xcuserstate
+.DS_Store
+*.log
+*.swp
+*.tmp

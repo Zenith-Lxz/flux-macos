@@ -37,7 +37,7 @@ Run the narrowest relevant checks during development and the full local gate
 before handoff:
 
 ```bash
-swift test
+./scripts/test.sh
 swift build -c release
 ./scripts/build-app.sh
 ./scripts/smoke-test.sh

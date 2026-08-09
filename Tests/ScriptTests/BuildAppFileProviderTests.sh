@@ -18,6 +18,7 @@ export FLUX_TEST_BIN_DIR="$TEST_DIR/swift-bin"
 mkdir -p "$FLUX_TEST_BIN_DIR"
 cp /usr/bin/true "$FLUX_TEST_BIN_DIR/FluxApp"
 
+FLUX_TEST_CODESIGN_FORBID_VERIFY_PREFIX="$TEST_DIR/dist" \
 PATH="$TEST_DIR/fake-bin:/usr/bin:/bin:/usr/sbin:/sbin" \
     "$TEST_DIR/scripts/build-app.sh"
 

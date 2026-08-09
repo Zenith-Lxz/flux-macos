@@ -23,20 +23,23 @@ MIN_SYSTEM="13.0"
 
 DIST_DIR="$ROOT_DIR/dist"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
-CONTENTS_DIR="$APP_DIR/Contents"
-MACOS_DIR="$CONTENTS_DIR/MacOS"
+BUILD_TEMP_DIR="$(mktemp -d /tmp/flux-build.XXXXXX)"
+trap 'rm -rf "$BUILD_TEMP_DIR"' EXIT
+STAGED_APP_DIR="$BUILD_TEMP_DIR/$APP_NAME.app"
+STAGED_CONTENTS_DIR="$STAGED_APP_DIR/Contents"
+STAGED_MACOS_DIR="$STAGED_CONTENTS_DIR/MacOS"
+VERIFY_APP_DIR="$BUILD_TEMP_DIR/verify/$APP_NAME.app"
 
 echo "==> Building FluxApp (release)"
 swift build -c release --product FluxApp
 
 BIN_PATH="$(swift build -c release --show-bin-path)/$EXECUTABLE_NAME"
 
-echo "==> Assembling $APP_DIR"
-rm -rf "$APP_DIR"
-mkdir -p "$MACOS_DIR"
-cp "$BIN_PATH" "$MACOS_DIR/$EXECUTABLE_NAME"
+echo "==> Assembling staged app"
+mkdir -p "$STAGED_MACOS_DIR"
+cp "$BIN_PATH" "$STAGED_MACOS_DIR/$EXECUTABLE_NAME"
 
-cat > "$CONTENTS_DIR/Info.plist" <<PLIST
+cat > "$STAGED_CONTENTS_DIR/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -69,38 +72,46 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# The repository may live under an iCloud/file-provider path whose extended
-# attributes (FinderInfo, fileprovider fpfs) make codesign reject the bundle.
-# Clean only after every bundle file has been written.
-xattr -cr "$APP_DIR" 2>/dev/null || true
+# Assemble and sign outside the repository's file-provider path. FinderInfo
+# and fpfs metadata can be reattached between cleanup and verification when
+# signing directly in dist, creating an unavoidable race.
+xattr -cr "$STAGED_APP_DIR" 2>/dev/null || true
 
 echo "==> Signing"
 if [[ -n "${FLUX_CODESIGN_IDENTITY:-}" ]]; then
     echo "==> Signing with identity: $FLUX_CODESIGN_IDENTITY"
-    codesign --force --sign "$FLUX_CODESIGN_IDENTITY" "$APP_DIR"
+    codesign --force --sign "$FLUX_CODESIGN_IDENTITY" "$STAGED_APP_DIR"
     SIGNING_METHOD="identity:$FLUX_CODESIGN_IDENTITY"
 else
     echo "WARNING: FLUX_CODESIGN_IDENTITY is not set; using ad-hoc signing."
     echo "         ad-hoc binaries may require re-granting Accessibility /"
     echo "         Input Monitoring permissions after a rebuild."
-    codesign --force --sign - "$APP_DIR"
+    codesign --force --sign - "$STAGED_APP_DIR"
     SIGNING_METHOD="ad-hoc"
 fi
 
-# The file provider can re-tag the bundle after signing. Remove those
-# attributes before the first strict verification; otherwise the verifier
-# rejects FinderInfo/fpfs metadata before the later cleanup can run.
-xattr -cr "$APP_DIR" 2>/dev/null || true
+# A signing tool or local filesystem may attach metadata even in staging;
+# clean it before verification. /tmp is not managed by the repository's file
+# provider, so it cannot be re-tagged by that provider between these steps.
+xattr -cr "$STAGED_APP_DIR" 2>/dev/null || true
 
 echo "==> Verifying signature"
-codesign --verify --deep --strict "$APP_DIR"
-codesign -d -r - "$APP_DIR" 2>/dev/null | sed 's/^/designated requirement: /'
+codesign --verify --deep --strict "$STAGED_APP_DIR"
+codesign -d -r - "$STAGED_APP_DIR" 2>/dev/null | sed 's/^/designated requirement: /'
 
-# The file provider re-tags bundle files with FinderInfo/fpfs xattrs after the
-# initial cleanup; remove them again so the recorded artifact is clean and the
-# smoke test's strict verification is stable.
+echo "==> Publishing $APP_DIR"
+rm -rf "$APP_DIR"
+mkdir -p "$DIST_DIR"
+ditto --noextattr --noqtn "$STAGED_APP_DIR" "$APP_DIR"
 xattr -cr "$APP_DIR" 2>/dev/null || true
-codesign --verify --deep --strict "$APP_DIR"
+
+# Prove the published file contents still carry the valid signature without
+# verifying inside the file-provider path: copy the bound artifact back to a
+# clean temporary location and verify that copy exactly once.
+mkdir -p "$(dirname "$VERIFY_APP_DIR")"
+ditto --noextattr --noqtn "$APP_DIR" "$VERIFY_APP_DIR"
+xattr -cr "$VERIFY_APP_DIR" 2>/dev/null || true
+codesign --verify --deep --strict "$VERIFY_APP_DIR"
 
 echo "==> Recording checksums"
 (cd "$APP_DIR" && find . -type f -exec shasum -a 256 {} + | sort) > "$DIST_DIR/$APP_NAME.app.sha256"

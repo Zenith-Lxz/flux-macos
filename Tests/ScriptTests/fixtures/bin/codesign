@@ -12,6 +12,11 @@ done
 
 for argument in "$@"; do
     if [[ "$argument" == "--verify" ]]; then
+        if [[ -n "${FLUX_TEST_CODESIGN_FORBID_VERIFY_PREFIX:-}" \
+            && "$APP_DIR" == "$FLUX_TEST_CODESIGN_FORBID_VERIFY_PREFIX"* ]]; then
+            echo "simulated file-provider verification race" >&2
+            exit 1
+        fi
         if [[ -e "$APP_DIR/.provider-metadata" ]]; then
             echo "simulated file-provider metadata rejected" >&2
             exit 1

@@ -47,12 +47,38 @@ struct PhysicalKeyTests {
         }
     }
 
+    @Test func modifierKeysHaveFrozenMacVirtualKeyCodes() {
+        #expect(PhysicalKey.leftControl.rawCode == 0x3B)
+        #expect(PhysicalKey.rightControl.rawCode == 0x3E)
+        #expect(PhysicalKey.leftCommand.rawCode == 0x37)
+        #expect(PhysicalKey.rightCommand.rawCode == 0x36)
+        #expect(PhysicalKey.leftOption.rawCode == 0x3A)
+        #expect(PhysicalKey.rightOption.rawCode == 0x3D)
+        #expect(PhysicalKey.leftShift.rawCode == 0x38)
+        #expect(PhysicalKey.rightShift.rawCode == 0x3C)
+    }
+
+    @Test func modifierKeysAreDistinctFromCaps() {
+        let modifiers: [PhysicalKey] = [
+            .leftControl, .rightControl,
+            .leftCommand, .rightCommand,
+            .leftOption, .rightOption,
+            .leftShift, .rightShift,
+        ]
+        #expect(Set(modifiers).count == 8)
+        #expect(!modifiers.contains(.caps))
+    }
+
     @Test func knownConstantsAreDistinct() {
         let constants: [PhysicalKey] = [
             .caps, .tab, .space, .returnKey, .escape, .backspace,
             .leftArrow, .upArrow, .rightArrow, .downArrow,
             .a, .b, .c, .d, .e, .f, .g, .h, .i, .j, .k, .l, .m,
             .n, .o, .p, .q, .r, .s, .t, .u, .v, .w, .x, .y, .z,
+            .leftControl, .rightControl,
+            .leftCommand, .rightCommand,
+            .leftOption, .rightOption,
+            .leftShift, .rightShift,
         ]
         #expect(Set(constants).count == constants.count)
     }
@@ -160,6 +186,10 @@ struct InputEventTests {
         #expect(InputEventKind.keyUp != InputEventKind.keyDown(isRepeat: false))
         #expect(InputEventKind.lifecycleReset == InputEventKind.lifecycleReset)
         #expect(InputEventKind.lifecycleReset != InputEventKind.keyUp)
+        #expect(InputEventKind.modifierChanged(isDown: true) != InputEventKind.modifierChanged(isDown: false))
+        #expect(InputEventKind.modifierChanged(isDown: true) == InputEventKind.modifierChanged(isDown: true))
+        #expect(InputEventKind.modifierChanged(isDown: true) != InputEventKind.capsChanged(isDown: true))
+        #expect(InputEventKind.modifierChanged(isDown: false) != InputEventKind.keyUp)
     }
 
     @Test func eventCarriesKeyModifiersSyntheticAndKind() {
@@ -240,6 +270,23 @@ struct InputActionTests {
         #expect(InputAction.passThrough != InputAction.suppress)
         #expect(InputAction.suppress != InputAction.returnToPreviousContext)
         #expect(InputAction.togglePause != InputAction.passThrough)
+    }
+
+    @Test func remapModifierCarriesTargetAndDirection() {
+        #expect(
+            InputAction.remapModifier(to: .leftCommand, isDown: true)
+                == InputAction.remapModifier(to: .leftCommand, isDown: true)
+        )
+        #expect(
+            InputAction.remapModifier(to: .leftCommand, isDown: true)
+                != InputAction.remapModifier(to: .leftCommand, isDown: false)
+        )
+        #expect(
+            InputAction.remapModifier(to: .leftCommand, isDown: true)
+                != InputAction.remapModifier(to: .rightCommand, isDown: true)
+        )
+        #expect(InputAction.remapModifier(to: .leftCommand, isDown: true) != InputAction.passThrough)
+        #expect(InputAction.remapModifier(to: .leftCommand, isDown: true) != InputAction.suppress)
     }
 
     @Test func moveFocusCarriesDirection() {

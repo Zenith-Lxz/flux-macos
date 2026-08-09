@@ -41,6 +41,27 @@ public struct PhysicalKey: Sendable, Equatable, Hashable {
     /// Up arrow (`kVK_UpArrow`, 0x7E).
     public static let upArrow = PhysicalKey(rawCode: 0x7E)
 
+    // Modifier keys (macOS HIToolbox `kVK_*`). Modifier presses arrive as
+    // `modifierChanged` events keyed by these physical keys; the router uses
+    // them for the left-control → left-command remap and chord tracking
+    // (design spec §3.3, §7).
+    /// Left Control (`kVK_Control`, 0x3B).
+    public static let leftControl = PhysicalKey(rawCode: 0x3B)
+    /// Right Control (`kVK_RightControl`, 0x3E).
+    public static let rightControl = PhysicalKey(rawCode: 0x3E)
+    /// Left Command (`kVK_Command`, 0x37).
+    public static let leftCommand = PhysicalKey(rawCode: 0x37)
+    /// Right Command (`kVK_RightCommand`, 0x36).
+    public static let rightCommand = PhysicalKey(rawCode: 0x36)
+    /// Left Option (`kVK_Option`, 0x3A).
+    public static let leftOption = PhysicalKey(rawCode: 0x3A)
+    /// Right Option (`kVK_RightOption`, 0x3D).
+    public static let rightOption = PhysicalKey(rawCode: 0x3D)
+    /// Left Shift (`kVK_Shift`, 0x38).
+    public static let leftShift = PhysicalKey(rawCode: 0x38)
+    /// Right Shift (`kVK_RightShift`, 0x3C).
+    public static let rightShift = PhysicalKey(rawCode: 0x3C)
+
     // ANSI letters (`kVK_ANSI_*`).
     public static let a = PhysicalKey(rawCode: 0x00)
     public static let s = PhysicalKey(rawCode: 0x01)
@@ -129,6 +150,9 @@ public struct KeyModifiers: OptionSet, Sendable, Hashable {
 public enum InputEventKind: Sendable, Equatable, Hashable {
     /// Physical Caps Lock state changed; `isDown` is the new pressed state.
     case capsChanged(isDown: Bool)
+    /// A modifier key changed; `isDown` is the new pressed state. The
+    /// event's `key` identifies which physical modifier key changed.
+    case modifierChanged(isDown: Bool)
     /// A key press; `isRepeat` distinguishes OS auto-repeat from the first
     /// press.
     case keyDown(isRepeat: Bool)
@@ -212,6 +236,10 @@ public enum InputAction: Sendable, Equatable, Hashable {
     case suppress
     /// Emit the given synthetic stroke (with the private marker).
     case emit(SyntheticKeyStroke)
+    /// Remap a modifier change to another physical modifier key (left
+    /// control → left command, design spec §3.3); `isDown` carries the
+    /// original press/release direction.
+    case remapModifier(to: PhysicalKey, isDown: Bool)
     /// Swap the current and previous contexts (single Caps press).
     case returnToPreviousContext
     /// Move the accessibility focus in a direction.

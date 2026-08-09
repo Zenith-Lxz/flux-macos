@@ -85,6 +85,27 @@ public final class ContextCoordinator {
         }
     }
 
+    /// Enriches the current snapshot with a window identifier.
+    ///
+    /// Unlike `observe`, enrichment mutates `current` in place and never
+    /// shifts history, so the window-less copy of the current context is not
+    /// pushed into `previous` when the window arrives a moment later. It is
+    /// forwarded directly even while a Return is in flight: it cannot
+    /// invalidate the captured candidate (only `previous` participates in
+    /// the commit), and applying it immediately lets the source window land
+    /// in `previous` when the transaction commits instead of being deferred
+    /// onto the post-commit current. Returns the history result.
+    @discardableResult
+    public func enrichCurrentWindow(
+        identifier: String,
+        processIdentifier: Int32
+    ) -> Bool {
+        history.enrichCurrentWindow(
+            identifier: identifier,
+            processIdentifier: processIdentifier
+        )
+    }
+
     /// Records that process `pid` terminated.
     ///
     /// The stored history and every queued observation matching `pid` keep

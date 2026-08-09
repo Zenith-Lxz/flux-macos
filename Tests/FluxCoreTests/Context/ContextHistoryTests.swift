@@ -110,6 +110,92 @@ struct ContextHistoryObservationTests {
     }
 }
 
+// MARK: - Window enrichment
+
+struct ContextHistoryWindowEnrichmentTests {
+    @Test func enrichmentAddsWindowToCurrentWithoutTouchingPrevious() {
+        let b = snap("B", 2, "b1")
+        var history = ContextHistory(initial: b)
+        history.observe(snap("A", 1, nil))
+        #expect(history.current == snap("A", 1, nil))
+        #expect(history.previous == b)
+
+        #expect(history.enrichCurrentWindow(identifier: "w1", processIdentifier: 1) == true)
+        // The current snapshot gains the window; bundle and process survive.
+        #expect(history.current == snap("A", 1, "w1"))
+        // Previous is untouched — no observation was pushed into it.
+        #expect(history.previous == b)
+        #expect(history.returnCandidate == b)
+    }
+
+    @Test func enrichmentIsNoOpForMissingCurrent() {
+        var history = ContextHistory()
+        #expect(history.enrichCurrentWindow(identifier: "w1", processIdentifier: 1) == false)
+        #expect(history.current == nil)
+        #expect(history.previous == nil)
+    }
+
+    @Test func enrichmentIsNoOpForDifferentProcessIdentifier() {
+        var history = ContextHistory(initial: snap("A", 1, nil))
+        #expect(history.enrichCurrentWindow(identifier: "w1", processIdentifier: 2) == false)
+        #expect(history.current == snap("A", 1, nil))
+        #expect(history.previous == nil)
+    }
+
+    @Test func enrichmentIsNoOpWhenCurrentHasNoProcessIdentifier() {
+        // A bundle-only snapshot cannot be enriched: it has no process to
+        // match, so the same-pid precondition fails.
+        var history = ContextHistory(initial: snap("A", nil, nil))
+        #expect(history.enrichCurrentWindow(identifier: "w1", processIdentifier: 1) == false)
+        #expect(history.current == snap("A", nil, nil))
+        #expect(history.previous == nil)
+    }
+
+    @Test func enrichmentIsNoOpWhenWindowIsAlreadyKnown() {
+        var history = ContextHistory(initial: snap("A", 1, "w1"))
+        #expect(history.enrichCurrentWindow(identifier: "w2", processIdentifier: 1) == false)
+        #expect(history.current == snap("A", 1, "w1"))
+        #expect(history.previous == nil)
+    }
+
+    @Test func enrichmentIsNoOpForEmptyIdentifier() {
+        var history = ContextHistory(initial: snap("A", 1, nil))
+        #expect(history.enrichCurrentWindow(identifier: "", processIdentifier: 1) == false)
+        #expect(history.current == snap("A", 1, nil))
+        #expect(history.previous == nil)
+    }
+
+    @Test func enrichmentKeepsSingleCapsReturnIntact() {
+        // Enriching the current context must not disturb the A ↔ B toggle:
+        // after enrichment the previous context is still the Return target
+        // and a commit still swaps exactly A and B.
+        let a = snap("A", 1, nil)
+        let b = snap("B", 2, "b1")
+        var history = ContextHistory(initial: b)
+        history.observe(a)
+        #expect(history.enrichCurrentWindow(identifier: "w1", processIdentifier: 1) == true)
+        #expect(history.current == snap("A", 1, "w1"))
+        #expect(history.previous == b)
+
+        #expect(history.commitReturn(to: b) == true)
+        #expect(history.current == b)
+        #expect(history.previous == snap("A", 1, "w1"))
+    }
+
+    @Test func enrichedCurrentMatchesLaterActivationNotificationExactly() {
+        // Once enriched, the app's next activation notification (same
+        // bundle, pid, and window) is an exact duplicate and must not shift
+        // history — the same guarantee that keeps the Return toggle stable.
+        var history = ContextHistory(initial: snap("B", 2, "b1"))
+        history.observe(snap("A", 1, nil))
+        #expect(history.enrichCurrentWindow(identifier: "w1", processIdentifier: 1) == true)
+
+        history.observe(snap("A", 1, "w1"))
+        #expect(history.current == snap("A", 1, "w1"))
+        #expect(history.previous == snap("B", 2, "b1"))
+    }
+}
+
 // MARK: - Return candidate and commit
 
 struct ContextHistoryReturnTests {

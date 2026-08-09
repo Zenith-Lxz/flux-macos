@@ -85,6 +85,40 @@ public struct ContextHistory: Sendable {
         return true
     }
 
+    /// Enriches the current snapshot with a window identifier.
+    ///
+    /// The focused window of the frontmost application may be discovered
+    /// asynchronously (the poll arrives after the activation notification),
+    /// so a window that appears for the already-current process must update
+    /// `current` in place instead of becoming a new observation — an
+    /// observation would push the window-less copy into `previous` and
+    /// pollute the Return toggle (design spec §4).
+    ///
+    /// Succeeds only when `current` exists, its `processIdentifier` equals
+    /// `processIdentifier`, its `windowIdentifier` is still nil, and
+    /// `identifier` is non-empty. Bundle and process are preserved and
+    /// `previous` is never touched. Returns false without mutation for a
+    /// missing current, a different (or missing) process, an already known
+    /// window, or an empty identifier.
+    @discardableResult
+    public mutating func enrichCurrentWindow(
+        identifier: String,
+        processIdentifier: Int32
+    ) -> Bool {
+        guard !identifier.isEmpty,
+              let current,
+              current.processIdentifier == processIdentifier,
+              current.windowIdentifier == nil else {
+            return false
+        }
+        self.current = ContextSnapshot(
+            bundleIdentifier: current.bundleIdentifier,
+            processIdentifier: current.processIdentifier,
+            windowIdentifier: identifier
+        )
+        return true
+    }
+
     /// Clears the live identity of a terminated process.
     ///
     /// Every stored snapshot whose `processIdentifier` matches `pid` keeps

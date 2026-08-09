@@ -273,6 +273,97 @@ struct ContextCoordinatorTerminationTests {
     }
 }
 
+// MARK: - Window enrichment forwarding
+
+@MainActor
+struct ContextCoordinatorWindowEnrichmentTests {
+    @Test func enrichmentForwardsToHistoryWhenNotInFlight() async {
+        let activator = ControllableActivator()
+        let coordinator = ContextCoordinator(initial: snap("B", 2, "b1"), activator: activator)
+        coordinator.observe(snap("A", 1, nil))
+
+        #expect(coordinator.enrichCurrentWindow(identifier: "w1", processIdentifier: 1) == true)
+        #expect(coordinator.history.current == snap("A", 1, "w1"))
+        #expect(coordinator.history.previous == snap("B", 2, "b1"))
+        #expect(!coordinator.isReturnInFlight)
+    }
+
+    @Test func enrichmentFailsWhenProcessDoesNotMatchCurrent() async {
+        let activator = ControllableActivator()
+        let coordinator = ContextCoordinator(initial: snap("B", 2, "b1"), activator: activator)
+        coordinator.observe(snap("A", 1, nil))
+
+        #expect(coordinator.enrichCurrentWindow(identifier: "w1", processIdentifier: 9) == false)
+        #expect(coordinator.history.current == snap("A", 1, nil))
+        #expect(coordinator.history.previous == snap("B", 2, "b1"))
+    }
+
+    @Test func enrichmentDuringInFlightPreservesReturnTransaction() async {
+        let activator = ControllableActivator()
+        let coordinator = ContextCoordinator(initial: snap("A", 1, "a1"), activator: activator)
+        coordinator.observe(snap("B", 2, nil))
+
+        let task = Task { await coordinator.returnToPrevious() }
+        await waitUntil { activator.calls.count == 1 }
+        #expect(coordinator.isReturnInFlight)
+
+        // The window poll captures the source app's window while the Return
+        // is in flight. Enrichment applies in place to the source current:
+        // it never shifts history, so the captured candidate stays valid.
+        #expect(coordinator.enrichCurrentWindow(identifier: "wB", processIdentifier: 2) == true)
+        #expect(coordinator.history.current == snap("B", 2, "wB"))
+        #expect(coordinator.history.previous == snap("A", 1, "a1"))
+
+        activator.completeFirst(success: true)
+        let result = await task.value
+
+        #expect(result == true)
+        // The transaction committed normally; the enriched source window
+        // landed in previous, exactly where a Return should find it.
+        #expect(coordinator.history.current == snap("A", 1, "a1"))
+        #expect(coordinator.history.previous == snap("B", 2, "wB"))
+        #expect(!coordinator.isReturnInFlight)
+    }
+
+    @Test func enrichmentDuringInFlightOfWrongProcessIsNoOp() async {
+        let activator = ControllableActivator()
+        let coordinator = ContextCoordinator(initial: snap("A", 1, "a1"), activator: activator)
+        coordinator.observe(snap("B", 2, nil))
+
+        let task = Task { await coordinator.returnToPrevious() }
+        await waitUntil { activator.calls.count == 1 }
+
+        // The activation notification's window belongs to the target (pid 1),
+        // which is previous, not current: enrichment must refuse it.
+        #expect(coordinator.enrichCurrentWindow(identifier: "wA", processIdentifier: 1) == false)
+        #expect(coordinator.history.current == snap("B", 2, nil))
+        #expect(coordinator.history.previous == snap("A", 1, "a1"))
+
+        activator.completeFirst(success: true)
+        _ = await task.value
+        #expect(!coordinator.isReturnInFlight)
+    }
+
+    @Test func enrichmentAfterActivationFailureKeepsEnrichedSource() async {
+        let activator = ControllableActivator()
+        let coordinator = ContextCoordinator(initial: snap("A", 1, "a1"), activator: activator)
+        coordinator.observe(snap("B", 2, nil))
+
+        let task = Task { await coordinator.returnToPrevious() }
+        await waitUntil { activator.calls.count == 1 }
+        #expect(coordinator.enrichCurrentWindow(identifier: "wB", processIdentifier: 2) == true)
+
+        activator.completeFirst(success: false)
+        let result = await task.value
+
+        #expect(result == false)
+        // No commit happened; the enriched source remains the current context.
+        #expect(coordinator.history.current == snap("B", 2, "wB"))
+        #expect(coordinator.history.previous == snap("A", 1, "a1"))
+        #expect(!coordinator.isReturnInFlight)
+    }
+}
+
 // MARK: - Reset
 
 @MainActor

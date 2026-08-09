@@ -2,10 +2,20 @@
 //
 // Bridges NSWorkspace frontmost-app notifications into the platform-neutral
 // `ContextCoordinator` and resolves a `ContextSnapshot` into a real
-// activation: activate the running instance or launch it through Launch
-// Services. Every AppKit access is confined to this MainActor type, so the
+// activation: activate the running instance (then best-effort raise its
+// remembered window) or launch it through Launch Services. Every AppKit and
+// ApplicationServices access is confined to this MainActor type, so the
 // coordinator and history stay unit-testable without macOS permissions
 // (design spec §7: platform boundaries are injected behind protocols).
+//
+// Window identity: the runtime owns one `MacOSWindowRegistry` that maps each
+// process's focused AX window to an opaque identifier (design spec §4:
+// bundle + process + focused window). The identifier is attached to the
+// observed context, polled every `windowPollInterval` seconds while started
+// so within-app window switches are captured even without an activation
+// event. A window discovered for the already-current process enriches the
+// current snapshot in place instead of shifting history, and a temporarily
+// missing window never downgrades a known one.
 //
 // Notification safety: NSWorkspace posts its workspace notifications on the
 // main thread, so selector-based NSObject observers reach the
@@ -14,14 +24,15 @@
 // is deliberately avoided because it delivers on an arbitrary queue.
 
 import AppKit
+import ApplicationServices
 import FluxCore
 
 /// Owns the context coordinator and its macOS observation/activation layer.
 ///
 /// Lifecycle: `start()` subscribes to the workspace activation and
 /// termination notifications, records the current frontmost application
-/// immediately, and forwards both event kinds into the coordinator.
-/// `stop()` removes the observers. Both methods are idempotent.
+/// immediately, and starts the focused-window poll; `stop()` removes the
+/// observers and invalidates the poll timer. Both methods are idempotent.
 @MainActor
 final class MacOSContextRuntime: NSObject, ContextTargetActivating {
     /// The platform-neutral coordinator, created lazily on first use so
@@ -29,8 +40,20 @@ final class MacOSContextRuntime: NSObject, ContextTargetActivating {
     /// this type, so a Return routes back through `activate(_:)`.
     private lazy var coordinator = ContextCoordinator(activator: self)
 
+    /// The focused-window registry that maps AX windows to opaque
+    /// identifiers. Owned here and purged as processes terminate.
+    private let windowRegistry = MacOSWindowRegistry()
+
     /// The workspace notifications currently observed, used for removal.
     private var observedNotificationNames: [Notification.Name] = []
+
+    /// The focused-window poll timer, running only while started.
+    private var windowPollTimer: Timer?
+
+    /// Poll cadence for capturing within-app focused-window switches
+    /// (seconds). Bounded to the 0.4–0.5 second band requested by the
+    /// window-restoration design.
+    private static let windowPollInterval: TimeInterval = 0.45
 
     // MARK: - Coordinator state (read-only forwarding)
 
@@ -67,6 +90,7 @@ final class MacOSContextRuntime: NSObject, ContextTargetActivating {
             NSWorkspace.didTerminateApplicationNotification,
         ]
         observeFrontmostApplication()
+        startWindowPolling()
     }
 
     /// Stops observing frontmost-app context. Idempotent and safe to repeat.
@@ -76,6 +100,38 @@ final class MacOSContextRuntime: NSObject, ContextTargetActivating {
             center.removeObserver(self, name: name, object: nil)
         }
         observedNotificationNames.removeAll()
+        stopWindowPolling()
+    }
+
+    /// Starts the focused-window poll. The timer is scheduled on the main
+    /// run loop so its callback runs on the main thread;
+    /// `MainActor.assumeIsolated` expresses that contract the same way the
+    /// permission poll does in the app delegate. Idempotent.
+    private func startWindowPolling() {
+        guard windowPollTimer == nil else { return }
+        let timer = Timer(
+            timeInterval: Self.windowPollInterval,
+            repeats: true
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.pollFocusedWindow()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        windowPollTimer = timer
+    }
+
+    /// Invalidates the focused-window poll. Idempotent.
+    private func stopWindowPolling() {
+        windowPollTimer?.invalidate()
+        windowPollTimer = nil
+    }
+
+    /// Records the current frontmost application's context, capturing a
+    /// within-app focused-window switch even without an activation event.
+    private func pollFocusedWindow() {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return }
+        recordActivation(app)
     }
 
     // MARK: - ContextTargetActivating
@@ -96,10 +152,10 @@ final class MacOSContextRuntime: NSObject, ContextTargetActivating {
            let pidApp = NSRunningApplication(processIdentifier: pid),
            !pidApp.isTerminated,
            pidApp.bundleIdentifier == bundleIdentifier {
-            return activateRunningApplication(pidApp)
+            return activateRunningApplication(pidApp, target: target)
         }
         if let candidate = selectRunningApplication(for: bundleIdentifier) {
-            return activateRunningApplication(candidate)
+            return activateRunningApplication(candidate, target: target)
         }
         return await launchApplication(bundleIdentifier)
     }
@@ -141,29 +197,71 @@ final class MacOSContextRuntime: NSObject, ContextTargetActivating {
     }
 
     /// Records a frontmost app unless it is Flux itself, lacks a bundle
-    /// identifier, or is already terminated.
+    /// identifier, or is already terminated. Called from the activation
+    /// notification, the initial capture on `start()`, and the poll timer.
     private func recordActivation(_ app: NSRunningApplication) {
         guard !app.isTerminated else { return }
         guard let bundleIdentifier = app.bundleIdentifier, !bundleIdentifier.isEmpty else {
             return
         }
         guard bundleIdentifier != AppMetadata.current.bundleIdentifier else { return }
-        coordinator.observe(
-            ContextSnapshot(
-                bundleIdentifier: bundleIdentifier,
-                processIdentifier: app.processIdentifier,
-                windowIdentifier: nil
-            )
-        )
+        recordContext(bundleIdentifier: bundleIdentifier, processIdentifier: app.processIdentifier)
     }
 
-    /// Marks a terminated process in the coordinator.
+    /// Records the context for `bundleIdentifier`/`processIdentifier`,
+    /// attaching the focused-window identifier captured after the identity
+    /// validation above.
+    ///
+    /// The same bundle/pid is treated specially so window discovery never
+    /// pollutes the single-Caps history (design spec §4):
+    /// - a window arriving for a current snapshot that has none enriches
+    ///   `current` in place — an observation would push the window-less copy
+    ///   into `previous`;
+    /// - a temporarily nil capture for a current snapshot that already knows
+    ///   its window preserves the known snapshot instead of downgrading it;
+    /// - a genuinely different nonnil window is a real switch and becomes a
+    ///   new observation, exactly like a different application.
+    private func recordContext(bundleIdentifier: String, processIdentifier: Int32) {
+        let windowIdentifier = windowRegistry.identifier(forFocusedWindowOf: processIdentifier)
+        let snapshot = ContextSnapshot(
+            bundleIdentifier: bundleIdentifier,
+            processIdentifier: processIdentifier,
+            windowIdentifier: windowIdentifier
+        )
+
+        guard let current = coordinator.history.current,
+              current.bundleIdentifier == bundleIdentifier,
+              current.processIdentifier == processIdentifier else {
+            coordinator.observe(snapshot)
+            return
+        }
+
+        if let windowIdentifier {
+            if current.windowIdentifier == nil {
+                coordinator.enrichCurrentWindow(
+                    identifier: windowIdentifier,
+                    processIdentifier: processIdentifier
+                )
+            } else if current.windowIdentifier != windowIdentifier {
+                coordinator.observe(snapshot)
+            }
+            // An equal window is an exact duplicate; observe ignores it.
+        } else if current.windowIdentifier == nil {
+            coordinator.observe(snapshot)
+        }
+        // Else: nil capture for a current snapshot that knows its window;
+        // preserve the known window rather than downgrading it.
+    }
+
+    /// Marks a terminated process in the coordinator and purges its window
+    /// registry entries.
     ///
     /// The PID is the authoritative key already stored in history, so the
     /// process is always marked terminated even when the termination
     /// notification carries no bundle metadata (and regardless of whether
     /// the terminated process is Flux itself).
     private func recordTermination(_ app: NSRunningApplication) {
+        windowRegistry.purge(processIdentifier: app.processIdentifier)
         coordinator.markProcessTerminated(app.processIdentifier)
     }
 
@@ -183,13 +281,47 @@ final class MacOSContextRuntime: NSObject, ContextTargetActivating {
     }
 
     /// Activates a running instance with empty options so macOS restores its
-    /// normal last key window instead of forcing all windows.
-    private func activateRunningApplication(_ app: NSRunningApplication) -> Bool {
+    /// normal last key window instead of forcing all windows, then
+    /// best-effort raises the target's remembered window when the instance
+    /// is the exact process that window belongs to.
+    ///
+    /// Application-level activation is the only success signal: a failed or
+    /// skipped window restoration never downgrades it, and a successful AX
+    /// raise never *proves* the application activated (the `activate`
+    /// result does).
+    private func activateRunningApplication(
+        _ app: NSRunningApplication,
+        target: ContextSnapshot
+    ) -> Bool {
         guard app.activate(options: []) else {
             NSLog("Flux: context activation failed: activate returned false")
             return false
         }
+        // A substituted instance (bundle fallback or relaunch) has a
+        // different pid and must not apply another process's window.
+        if app.processIdentifier == target.processIdentifier,
+           let windowIdentifier = target.windowIdentifier {
+            restoreWindowBestEffort(windowIdentifier, pid: app.processIdentifier)
+        }
         return true
+    }
+
+    /// Best-effort restoration of one remembered window. Logs only constant
+    /// state, the pid, and AX error codes (design spec §8); the result
+    /// never affects the caller's activation success.
+    private func restoreWindowBestEffort(_ identifier: String, pid: Int32) {
+        switch windowRegistry.restore(identifier: identifier, for: pid) {
+        case .restored:
+            break
+        case .notFound:
+            NSLog("Flux: context window restore skipped: no window registered (pid %d)", pid)
+        case .pidMismatch:
+            NSLog("Flux: context window restore skipped: process mismatch (pid %d)", pid)
+        case .staleRemoved:
+            NSLog("Flux: context window restore skipped: stale window removed (pid %d)", pid)
+        case .axFailed(let code):
+            NSLog("Flux: context window restore failed (pid %d, ax %d)", pid, code)
+        }
     }
 
     /// Launches the application via Launch Services with activation enabled.

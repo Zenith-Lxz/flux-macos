@@ -30,10 +30,11 @@ import Foundation
 @MainActor
 final class MacOSPointerController {
     /// Private marker written into `eventSourceUserData` on every synthetic
-    /// event (design spec §7). The event tap reads this field and passes
-    /// marked events through untouched so Flux output never loops back into
-    /// Flux input.
-    static let syntheticEventMarker: Int64 = 0x4658_0001
+    /// event (design spec §7). The value is the shared marker owned by
+    /// `SyntheticEventMarker` so keyboard and pointer output carry the same
+    /// marker; the event tap reads this field and passes marked events
+    /// through untouched so Flux output never loops back into Flux input.
+    static let syntheticEventMarker: Int64 = SyntheticEventMarker.value
 
     /// The owned pointer motion sequence; every move advances it and
     /// `resetMotion()` clears it.

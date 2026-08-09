@@ -43,6 +43,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var statusItem: NSStatusItem?
     private var permissionPollTimer: Timer?
+    private var contextReturnFailureTimer: Timer?
+    private var isContextReturnFailureVisible = false
     private var pauseMenuItem: NSMenuItem?
     private var launchAtLoginMenuItem: NSMenuItem?
 
@@ -54,6 +56,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Poll interval while permissions are missing (design spec §8).
     private static let permissionPollInterval: TimeInterval = 2.0
+
+    /// Brief enough to remain ambient, long enough for the menu-bar icon and
+    /// tooltip to be noticed after an empty single-Caps Return.
+    private static let contextReturnFailureDuration: TimeInterval = 0.8
 
     /// UserDefaults key for the one-time first-launch permission alert.
     private static let onboardingPermissionAlertKey = "FluxOnboardingPermissionAlertPresented"
@@ -80,6 +86,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         inputEngine.onListeningFailure = { [weak self] in
             self?.inputEngineListeningDidFail()
         }
+        inputEngine.onContextReturnFailure = { [weak self] in
+            self?.showContextReturnFailure()
+        }
         refreshPermissionState()
         refreshLoginItemState()
         presentOnboardingIfNeeded()
@@ -88,6 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         stopPermissionPolling()
+        contextReturnFailureTimer?.invalidate()
         inputEngine.stop()
         contextRuntime.stop()
     }
@@ -135,7 +145,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let runtimeStatus = AppRuntimeStatus.resolve(
             permissionReady: snapshot.isReady,
             inputEngineRunning: inputEngine.isRunning,
-            paused: inputEngine.isPaused
+            paused: inputEngine.isPaused,
+            contextReturnFailed: isContextReturnFailureVisible
         )
         switch runtimeStatus {
         case .permissionsNeeded:
@@ -148,6 +159,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             symbolName = "bolt.slash.fill"
             fallbackTitle = "✕ Flux"
             toolTip = "Flux — 监听失败"
+        case .contextReturnFailed:
+            symbolName = "exclamationmark.circle.fill"
+            fallbackTitle = "! Flux"
+            toolTip = "Flux — 没有可返回的位置"
         case .paused:
             symbolName = "pause.fill"
             fallbackTitle = "⏸ Flux"
@@ -242,6 +257,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateStatusItem(snapshot: currentPermissionSnapshot())
         updatePauseMenuItem()
         refreshSettingsWindow()
+    }
+
+    /// Shows a transient status-only failure when Return has no valid target.
+    /// Repeated empty Returns extend the same 0.8-second window; no alert,
+    /// overlay, sound, or focus change is introduced.
+    private func showContextReturnFailure() {
+        contextReturnFailureTimer?.invalidate()
+        isContextReturnFailureVisible = true
+        updateStatusItem(snapshot: currentPermissionSnapshot())
+
+        let timer = Timer(
+            timeInterval: Self.contextReturnFailureDuration,
+            repeats: false
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.isContextReturnFailureVisible = false
+                self.contextReturnFailureTimer = nil
+                self.updateStatusItem(snapshot: self.currentPermissionSnapshot())
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        contextReturnFailureTimer = timer
     }
 
     /// Polls the permission snapshot while it is not ready. The timer is

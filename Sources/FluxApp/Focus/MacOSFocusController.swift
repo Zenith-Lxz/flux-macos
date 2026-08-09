@@ -128,10 +128,10 @@ final class MacOSFocusController {
         }
 
         let pid = frontmost.processIdentifier
-        // AXUIElementSetMessagingTimeout applies only to the exact element
-        // passed to it. Setting it on the system-wide element configures the
-        // process-global timeout, which is required to bound the descendant
-        // window/control reads below (Apple Accessibility contract).
+        // Apple documents one special case: setting the timeout on the
+        // system-wide element configures it globally for this process. That
+        // bounds the application, window, and descendant reads below; using
+        // an ordinary element would affect only that exact object.
         let systemWide = AXUIElementCreateSystemWide()
         let timeoutError = AXUIElementSetMessagingTimeout(systemWide, messagingTimeout)
         guard timeoutError == .success else {

@@ -6,7 +6,8 @@ struct AppRuntimeStatusTests {
         #expect(AppRuntimeStatus.resolve(
             permissionReady: false,
             inputEngineRunning: false,
-            paused: true
+            paused: true,
+            contextReturnFailed: true
         ) == .permissionsNeeded)
     }
 
@@ -14,15 +15,26 @@ struct AppRuntimeStatusTests {
         #expect(AppRuntimeStatus.resolve(
             permissionReady: true,
             inputEngineRunning: false,
-            paused: true
+            paused: true,
+            contextReturnFailed: true
         ) == .listeningFailed)
+    }
+
+    @Test func contextReturnFailureIsVisibleWhileRunning() {
+        #expect(AppRuntimeStatus.resolve(
+            permissionReady: true,
+            inputEngineRunning: true,
+            paused: false,
+            contextReturnFailed: true
+        ) == .contextReturnFailed)
     }
 
     @Test func pauseRequiresARunningEngine() {
         #expect(AppRuntimeStatus.resolve(
             permissionReady: true,
             inputEngineRunning: true,
-            paused: true
+            paused: true,
+            contextReturnFailed: false
         ) == .paused)
     }
 
@@ -30,7 +42,8 @@ struct AppRuntimeStatusTests {
         #expect(AppRuntimeStatus.resolve(
             permissionReady: true,
             inputEngineRunning: true,
-            paused: false
+            paused: false,
+            contextReturnFailed: false
         ) == .running)
     }
 }

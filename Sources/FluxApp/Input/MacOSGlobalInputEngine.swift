@@ -68,6 +68,11 @@ final class MacOSGlobalInputEngine {
     /// resources have been scheduled for fail-closed teardown.
     var onListeningFailure: (() -> Void)?
 
+    /// Invoked when a single-Caps Return has no valid previous target. The
+    /// app delegate turns this into brief menu-bar feedback without showing
+    /// a panel or interrupting keyboard flow (design spec §4).
+    var onContextReturnFailure: (() -> Void)?
+
     // MARK: - Physical Caps capture
 
     /// Last raw Caps Lock state forwarded by the HID callback (nil before
@@ -529,7 +534,12 @@ final class MacOSGlobalInputEngine {
             return nil
 
         case .returnToPreviousContext:
-            Task { await contextRuntime.returnToPrevious() }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if !(await self.contextRuntime.returnToPrevious()) {
+                    self.onContextReturnFailure?()
+                }
+            }
             return nil
 
         case .moveFocus(let direction):

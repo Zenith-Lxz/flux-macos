@@ -2,6 +2,7 @@
 enum AppRuntimeStatus: Sendable, Equatable {
     case permissionsNeeded
     case listeningFailed
+    case contextReturnFailed
     case paused
     case running
 
@@ -14,10 +15,12 @@ enum AppRuntimeStatus: Sendable, Equatable {
     static func resolve(
         permissionReady: Bool,
         inputEngineRunning: Bool,
-        paused: Bool
+        paused: Bool,
+        contextReturnFailed: Bool
     ) -> AppRuntimeStatus {
         guard permissionReady else { return .permissionsNeeded }
         guard inputEngineRunning else { return .listeningFailed }
+        if contextReturnFailed { return .contextReturnFailed }
         return paused ? .paused : .running
     }
 }

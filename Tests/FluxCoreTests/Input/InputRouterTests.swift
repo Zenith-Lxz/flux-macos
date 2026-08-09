@@ -805,3 +805,118 @@ struct InputRouterPriorityTests {
         }
     }
 }
+
+// MARK: - Runtime configuration
+
+struct InputRouterConfigurationTests {
+    @Test func customAndDisabledApplicationBindingsDriveDirectLaunches() {
+        var router = InputRouter(
+            configuration: FluxConfiguration(
+                applications: .init(
+                    ares: "com.example.ares",
+                    codex: nil
+                )
+            )
+        )
+
+        #expect(capsDown(&router) == .suppress)
+        #expect(
+            keyDown(&router, key: .a, modifiers: [.leftCommand])
+                == .launchApplication(bundleIdentifier: "com.example.ares")
+        )
+        #expect(keyUp(&router, key: .a) == .suppress)
+        #expect(capsUp(&router) == .suppress)
+
+        #expect(capsDown(&router) == .suppress)
+        #expect(
+            keyDown(&router, key: .c, modifiers: [.leftCommand])
+                == emit(.c, [.leftCommand, .rightControl])
+        )
+    }
+
+    @Test func disabledCapsTextAndEditingMappingsUseRightControlFallback() {
+        var router = InputRouter(
+            configuration: FluxConfiguration(
+                mappings: .init(
+                    capsTextNavigationEnabled: false,
+                    capsEditingEnabled: false
+                )
+            )
+        )
+
+        #expect(capsDown(&router) == .suppress)
+        #expect(keyDown(&router, key: .b) == emit(.b, [.rightControl]))
+        #expect(keyDown(&router, key: .h) == emit(.h, [.rightControl]))
+        #expect(keyDown(&router, key: .o) == emit(.o, [.rightControl]))
+    }
+
+    @Test func chromeTabUsesConfiguredBundleAndCanBeDisabled() {
+        let applications = FluxConfiguration.Applications(chrome: "com.example.browser")
+        var customRouter = InputRouter(
+            configuration: FluxConfiguration(applications: applications)
+        )
+        #expect(capsDown(&customRouter) == .suppress)
+        #expect(
+            keyDown(&customRouter, key: .tab, frontmost: "com.example.browser")
+                == emit(.y, [.leftOption])
+        )
+
+        var disabledRouter = InputRouter(
+            configuration: FluxConfiguration(
+                applications: applications,
+                mappings: .init(chromeTabEnabled: false)
+            )
+        )
+        #expect(capsDown(&disabledRouter) == .suppress)
+        #expect(
+            keyDown(&disabledRouter, key: .tab, frontmost: "com.example.browser")
+                == emit(.tab, [.rightControl])
+        )
+    }
+
+    @Test func nonCapsMappingsCanBeDisabledIndependently() {
+        var router = InputRouter(
+            configuration: FluxConfiguration(
+                mappings: .init(
+                    leftControlAsCommandEnabled: false,
+                    leftControlMAsReturnEnabled: false,
+                    commandEToCommandMEnabled: false,
+                    legacyTerminalCopyEnabled: false
+                )
+            )
+        )
+
+        #expect(modifierChanged(&router, key: .leftControl, isDown: true) == .passThrough)
+        #expect(keyDown(&router, key: .a, modifiers: [.leftControl]) == .passThrough)
+        #expect(keyDown(&router, key: .m, modifiers: [.leftControl]) == .passThrough)
+        #expect(keyDown(&router, key: .e, modifiers: [.leftCommand]) == .passThrough)
+        #expect(
+            keyDown(&router, key: .c, modifiers: [.leftCommand], frontmost: iTerm2)
+                == .passThrough
+        )
+    }
+
+    @Test func disabledControlMStillUsesEnabledGenericControlMapping() {
+        var router = InputRouter(
+            configuration: FluxConfiguration(
+                mappings: .init(leftControlMAsReturnEnabled: false)
+            )
+        )
+
+        #expect(
+            keyDown(&router, key: .m, modifiers: [.leftControl])
+                == emit(.m, [.leftCommand])
+        )
+    }
+
+    @Test func updatingConfigurationResetsHeldChordState() {
+        var router = InputRouter()
+        #expect(capsDown(&router) == .suppress)
+
+        router.updateConfiguration(FluxConfiguration(mappings: .init(capsEditingEnabled: false)))
+
+        #expect(capsUp(&router) == .suppress)
+        #expect(capsDown(&router) == .suppress)
+        #expect(keyDown(&router, key: .h) == emit(.h, [.rightControl]))
+    }
+}

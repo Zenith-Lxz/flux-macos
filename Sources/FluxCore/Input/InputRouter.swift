@@ -12,6 +12,10 @@
 public struct InputRouter: Sendable {
     // MARK: State
 
+    /// Sanitized runtime configuration. Updating it clears all transient
+    /// routing state so a held chord can never straddle two configurations.
+    private var configuration: FluxConfiguration
+
     /// Whether the physical Caps Lock key is currently held.
     private var capsDown = false
     /// Whether the current Caps hold produced a chord (a routed keyDown or
@@ -42,7 +46,16 @@ public struct InputRouter: Sendable {
         case suppressOnly
     }
 
-    public init() {}
+    public init(configuration: FluxConfiguration = .default) {
+        self.configuration = configuration.sanitized()
+    }
+
+    /// Applies one complete configuration snapshot and clears held-key,
+    /// chord, and suppression state before the next physical event.
+    public mutating func updateConfiguration(_ configuration: FluxConfiguration) {
+        self.configuration = configuration.sanitized()
+        reset()
+    }
 
     // MARK: Routing
 
@@ -187,7 +200,8 @@ public struct InputRouter: Sendable {
             }
             return .suppress
         }
-        if key == .leftControl {
+        if key == .leftControl,
+           configuration.mappings.leftControlAsCommandEnabled {
             // Left Control is remapped to Left Command (design spec §3.3).
             return .remapModifier(to: .leftCommand, isDown: isDown)
         }
@@ -228,8 +242,8 @@ public struct InputRouter: Sendable {
 
         // Direct application launch: Caps + Command + memory letter.
         if modifiers.command {
-            if let app = Self.appDirect[key] {
-                return .launchApplication(bundleIdentifier: app.rawValue)
+            if let bundleIdentifier = applicationBundleIdentifier(for: key) {
+                return .launchApplication(bundleIdentifier: bundleIdentifier)
             }
         }
 
@@ -247,22 +261,22 @@ public struct InputRouter: Sendable {
                 return .moveFocus(.down)
             case .upArrow:
                 return .moveFocus(.up)
-            case .b:
+            case .b where configuration.mappings.capsTextNavigationEnabled:
                 return .emit(SyntheticKeyStroke(key: .leftArrow, modifiers: []))
-            case .n:
+            case .n where configuration.mappings.capsTextNavigationEnabled:
                 return .emit(SyntheticKeyStroke(key: .downArrow, modifiers: []))
-            case .p:
+            case .p where configuration.mappings.capsTextNavigationEnabled:
                 return .emit(SyntheticKeyStroke(key: .upArrow, modifiers: []))
-            case .f:
+            case .f where configuration.mappings.capsTextNavigationEnabled:
                 return .emit(SyntheticKeyStroke(key: .rightArrow, modifiers: []))
-            case .h:
+            case .h where configuration.mappings.capsEditingEnabled:
                 return .emit(SyntheticKeyStroke(key: .backspace, modifiers: []))
-            case .o:
+            case .o where configuration.mappings.capsEditingEnabled:
                 return .emit(SyntheticKeyStroke(key: .returnKey, modifiers: []))
             case .escape:
                 return .emit(SyntheticKeyStroke(key: .escape, modifiers: []))
-            case .tab:
-                if frontmost.bundleIdentifier == AppBundleIdentifier.chrome.rawValue {
+            case .tab where configuration.mappings.chromeTabEnabled:
+                if frontmost.bundleIdentifier == configuration.applications.chrome {
                     return .emit(SyntheticKeyStroke(key: .y, modifiers: [.leftOption]))
                 }
             default:
@@ -289,6 +303,7 @@ public struct InputRouter: Sendable {
         // `st` becomes Control+C. The rule is closable in settings; the
         // router only applies it to the exact terminal bundles.
         if key == .c,
+           configuration.mappings.legacyTerminalCopyEnabled,
            modifiers == [.leftCommand] || modifiers == [.rightCommand],
            Self.terminalBundles.contains(frontmost.bundleIdentifier ?? "") {
             return .emit(SyntheticKeyStroke(key: .c, modifiers: [.leftControl]))
@@ -297,19 +312,24 @@ public struct InputRouter: Sendable {
         // Command + E becomes Command + M. The current Karabiner output
         // always emits a plain Left Command + M: Shift, Option, and Control
         // are not preserved.
-        if key == .e, modifiers.command {
+        if key == .e,
+           configuration.mappings.commandEToCommandMEnabled,
+           modifiers.command {
             return .emit(SyntheticKeyStroke(key: .m, modifiers: [.leftCommand]))
         }
 
         // Left Control + M becomes Return; it takes priority over the
         // generic Left Control mapping and always emits with no modifiers.
-        if key == .m, modifiers.contains(.leftControl) {
+        if key == .m,
+           configuration.mappings.leftControlMAsReturnEnabled,
+           modifiers.contains(.leftControl) {
             return .emit(SyntheticKeyStroke(key: .returnKey, modifiers: []))
         }
 
         // Other Left Control chords become Left Command + the same key,
         // keeping every other modifier.
-        if modifiers.contains(.leftControl) {
+        if configuration.mappings.leftControlAsCommandEnabled,
+           modifiers.contains(.leftControl) {
             let outputModifiers = modifiers
                 .subtracting([.leftControl])
                 .union([.leftCommand])
@@ -330,17 +350,22 @@ public struct InputRouter: Sendable {
 
     // MARK: Frozen tables
 
-    /// The eight direct-launch targets (design spec §3.2).
-    private static let appDirect: [PhysicalKey: AppBundleIdentifier] = [
-        .a: .ares,
-        .c: .codex,
-        .g: .chrome,
-        .x: .wechat,
-        .l: .lark,
-        .w: .wps,
-        .h: .hermes,
-        .f: .finder,
-    ]
+    /// Resolves one direct-launch key through the current semantic app
+    /// bindings. A nil binding deliberately disables that key and lets the
+    /// ordinary Right-Control fallback handle it.
+    private func applicationBundleIdentifier(for key: PhysicalKey) -> String? {
+        switch key {
+        case .a: configuration.applications.ares
+        case .c: configuration.applications.codex
+        case .g: configuration.applications.chrome
+        case .x: configuration.applications.wechat
+        case .l: configuration.applications.lark
+        case .w: configuration.applications.wps
+        case .h: configuration.applications.hermes
+        case .f: configuration.applications.finder
+        default: nil
+        }
+    }
 
     /// Terminals that opt into the Command+C → Control+C compatibility rule
     /// (design spec §3.3).

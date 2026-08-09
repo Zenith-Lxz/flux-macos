@@ -19,3 +19,4 @@ else
 fi
 
 bash "$ROOT_DIR/Tests/ScriptTests/BuildAppFileProviderTests.sh"
+bash "$ROOT_DIR/Tests/ScriptTests/SmokeTestFileProviderTests.sh"

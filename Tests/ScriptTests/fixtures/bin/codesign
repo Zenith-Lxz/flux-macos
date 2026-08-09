@@ -16,6 +16,9 @@ for argument in "$@"; do
             echo "simulated file-provider metadata rejected" >&2
             exit 1
         fi
+        if [[ "${FLUX_TEST_CODESIGN_MODE:-}" == "smoke-race" ]]; then
+            touch "$APP_DIR/.provider-metadata"
+        fi
         exit 0
     fi
 done

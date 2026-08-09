@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s: Mach-O 64-bit executable arm64\n' "${1:?missing executable path}"

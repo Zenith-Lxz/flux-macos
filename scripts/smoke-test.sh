@@ -57,18 +57,15 @@ ARCHS="$(lipo -archs "$MACOS_DIR/$EXECUTABLE_NAME" 2>/dev/null || true)"
 [[ "$ARCHS" == "arm64" ]] || fail "unexpected architecture: ${ARCHS:-unknown}"
 pass "executable is Mach-O arm64"
 
-# 5. Codesign verification. Never mutate the bound source artifact. A file
-# provider may attach metadata that strict verification rejects; in that case,
-# verify a metadata-clean temporary copy instead.
-VERIFY_APP="$APP_DIR"
-SMOKE_TEMP_DIR=""
-if ! codesign --verify --deep --strict "$VERIFY_APP" 2>/dev/null; then
-    SMOKE_TEMP_DIR="$(mktemp -d /tmp/flux-smoke.XXXXXX)"
-    trap 'rm -rf "$SMOKE_TEMP_DIR"' EXIT
-    VERIFY_APP="$SMOKE_TEMP_DIR/$APP_NAME.app"
-    ditto --noextattr --noqtn "$APP_DIR" "$VERIFY_APP"
-    xattr -cr "$VERIFY_APP" 2>/dev/null || true
-fi
+# 5. Codesign verification. Never mutate the bound source artifact. Always
+# verify a metadata-clean temporary copy: a file provider can re-tag the
+# source bundle between a successful probe and a second verification, so a
+# conditional fallback has an unavoidable time-of-check/time-of-use race.
+SMOKE_TEMP_DIR="$(mktemp -d /tmp/flux-smoke.XXXXXX)"
+trap 'rm -rf "$SMOKE_TEMP_DIR"' EXIT
+VERIFY_APP="$SMOKE_TEMP_DIR/$APP_NAME.app"
+ditto --noextattr --noqtn "$APP_DIR" "$VERIFY_APP"
+xattr -cr "$VERIFY_APP" 2>/dev/null || true
 codesign --verify --deep --strict "$VERIFY_APP" || fail "codesign --verify --deep --strict failed"
 pass "codesign verify"
 

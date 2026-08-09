@@ -34,7 +34,7 @@ import FluxCore
 /// immediately, and starts the focused-window poll; `stop()` removes the
 /// observers and invalidates the poll timer. Both methods are idempotent.
 @MainActor
-final class MacOSContextRuntime: NSObject, ContextTargetActivating {
+final class MacOSContextRuntime: NSObject, ContextTargetActivating, FrontmostAppProviding {
     /// The platform-neutral coordinator, created lazily on first use so
     /// constructing the runtime touches no AppKit state. Its activator is
     /// this type, so a Return routes back through `activate(_:)`.
@@ -60,6 +60,13 @@ final class MacOSContextRuntime: NSObject, ContextTargetActivating {
     /// The observed context history.
     var contextHistory: ContextHistory {
         coordinator.history
+    }
+
+    /// Bundle identity from the same observed context history used for
+    /// Return. Input routing consumes it through `FrontmostAppProviding`
+    /// instead of reaching into the concrete runtime.
+    var frontmostBundleIdentifier: String? {
+        coordinator.history.current?.bundleIdentifier
     }
 
     /// Whether a Return activation is currently awaiting its activator.

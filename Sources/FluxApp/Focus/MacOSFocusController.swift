@@ -27,7 +27,7 @@ import FluxCore
 /// actions; tree and window changes are inherently picked up on the next
 /// move.
 @MainActor
-final class MacOSFocusController {
+final class MacOSFocusController: AXTreeReading {
     // MARK: - Configuration
 
     /// Floor for the per-application AX messaging timeout (seconds). The

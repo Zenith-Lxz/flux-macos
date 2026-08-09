@@ -40,8 +40,11 @@ final class MacOSGlobalInputEngine {
     // MARK: - Dependencies
 
     private let contextRuntime: MacOSContextRuntime
-    private let focusController: MacOSFocusController
+    private let focusController: any AXTreeReading
     private let pointerController: MacOSPointerController
+    private let frontmostAppProvider: any FrontmostAppProviding
+    private let eventTapProvider: any EventTapProviding
+    private let eventPoster: any EventPosting
 
     // MARK: - Routed state
 
@@ -100,14 +103,20 @@ final class MacOSGlobalInputEngine {
 
     init(
         contextRuntime: MacOSContextRuntime,
-        focusController: MacOSFocusController,
+        focusController: any AXTreeReading,
         pointerController: MacOSPointerController,
+        frontmostAppProvider: (any FrontmostAppProviding)? = nil,
+        eventTapProvider: any EventTapProviding = MacOSEventTapProvider(),
+        eventPoster: any EventPosting = MacOSEventPoster(),
         configuration: FluxConfiguration = .default
     ) {
         let configuration = configuration.sanitized()
         self.contextRuntime = contextRuntime
         self.focusController = focusController
         self.pointerController = pointerController
+        self.frontmostAppProvider = frontmostAppProvider ?? contextRuntime
+        self.eventTapProvider = eventTapProvider
+        self.eventPoster = eventPoster
         self.router = InputRouter(configuration: configuration)
         self.isPaused = !configuration.enabled
         pointerController.updateSpeedMultiplier(configuration.pointerSpeedMultiplier)
@@ -134,11 +143,11 @@ final class MacOSGlobalInputEngine {
 
     deinit {
         if let source = eventTapSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+            eventTapProvider.removeFromMainRunLoop(source)
         }
         if let tap = eventTap {
-            CGEvent.tapEnable(tap: tap, enable: false)
-            CFMachPortInvalidate(tap)
+            eventTapProvider.setEnabled(tap, false)
+            eventTapProvider.invalidate(tap)
         }
         if let manager = hidManager {
             IOHIDManagerUnscheduleFromRunLoop(
@@ -243,14 +252,7 @@ final class MacOSGlobalInputEngine {
     // MARK: - Event tap installation
 
     private func installEventTap() -> Bool {
-        let eventsOfInterest: CGEventMask = (UInt64(1) << UInt64(CGEventType.keyDown.rawValue))
-            | (UInt64(1) << UInt64(CGEventType.keyUp.rawValue))
-            | (UInt64(1) << UInt64(CGEventType.flagsChanged.rawValue))
-        guard let tap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: .defaultTap,
-            eventsOfInterest: eventsOfInterest,
+        guard let tap = eventTapProvider.createEventTap(
             callback: Self.eventTapCallback,
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
@@ -258,25 +260,25 @@ final class MacOSGlobalInputEngine {
             return false
         }
         eventTap = tap
-        guard let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
+        guard let source = eventTapProvider.createRunLoopSource(for: tap) else {
             NSLog("Flux: input engine: event tap run loop source creation failed")
             teardownEventTap()
             return false
         }
         eventTapSource = source
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
+        eventTapProvider.addToMainRunLoop(source)
+        eventTapProvider.setEnabled(tap, true)
         return true
     }
 
     private func teardownEventTap() {
         if let source = eventTapSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+            eventTapProvider.removeFromMainRunLoop(source)
         }
         eventTapSource = nil
         if let tap = eventTap {
-            CGEvent.tapEnable(tap: tap, enable: false)
-            CFMachPortInvalidate(tap)
+            eventTapProvider.setEnabled(tap, false)
+            eventTapProvider.invalidate(tap)
         }
         eventTap = nil
     }
@@ -335,8 +337,8 @@ final class MacOSGlobalInputEngine {
             let hasTap = eventTap != nil
             var enabledAfterAttempt = false
             if let tap = eventTap {
-                CGEvent.tapEnable(tap: tap, enable: true)
-                enabledAfterAttempt = CGEvent.tapIsEnabled(tap: tap)
+                eventTapProvider.setEnabled(tap, true)
+                enabledAfterAttempt = eventTapProvider.isEnabled(tap)
             }
             switch lifecycleState.reconcileRecovery(
                 hasTap: hasTap,
@@ -518,8 +520,8 @@ final class MacOSGlobalInputEngine {
                   let up = Self.keyEvent(key: stroke.key, isDown: false, modifiers: stroke.modifiers) else {
                 return nil
             }
-            down.post(tap: .cghidEventTap)
-            up.post(tap: .cghidEventTap)
+            eventPoster.post(down)
+            eventPoster.post(up)
             return nil
 
         case .remapModifier(let target, let isDown):
@@ -530,7 +532,7 @@ final class MacOSGlobalInputEngine {
             ) else {
                 return nil
             }
-            event.post(tap: .cghidEventTap)
+            eventPoster.post(event)
             return nil
 
         case .returnToPreviousContext:
@@ -659,7 +661,7 @@ final class MacOSGlobalInputEngine {
     /// The frontmost context the router sees, from the context runtime's
     /// observed history.
     private func frontmostContext() -> FrontmostContext {
-        FrontmostContext(bundleIdentifier: contextRuntime.contextHistory.current?.bundleIdentifier)
+        FrontmostContext(bundleIdentifier: frontmostAppProvider.frontmostBundleIdentifier)
     }
 
     // MARK: - Pause

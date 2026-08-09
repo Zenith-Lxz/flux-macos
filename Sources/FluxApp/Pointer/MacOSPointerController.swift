@@ -51,17 +51,23 @@ final class MacOSPointerController {
     /// permission-free and side-effect-free.
     private let snapper: any PointerSnapping
 
+    /// Injected synthetic-event boundary. The default posts at the HID tap;
+    /// tests use a recorder and never touch the user's pointer stream.
+    private let eventPoster: any EventPosting
+
     /// Generation of the latest pointer move. Every move advances it so a
     /// queued snap from an older move can be discarded before it posts.
     private var snapGeneration: UInt64 = 0
 
     init(
         profile: PointerMotionProfile = .default,
-        snapper: any PointerSnapping = MacOSPointerSnapper()
+        snapper: any PointerSnapping = MacOSPointerSnapper(),
+        eventPoster: any EventPosting = MacOSEventPoster()
     ) {
         self.baseProfile = profile
         self.motionState = PointerMotionState(profile: profile)
         self.snapper = snapper
+        self.eventPoster = eventPoster
     }
 
     /// Current effective profile, exposed internally for deterministic tests
@@ -163,7 +169,7 @@ final class MacOSPointerController {
             .eventSourceUserData,
             value: Self.syntheticEventMarker
         )
-        event.post(tap: .cghidEventTap)
+        eventPoster.post(event)
         return true
     }
 
@@ -204,7 +210,7 @@ final class MacOSPointerController {
         }
 
         for event in events {
-            event.post(tap: .cghidEventTap)
+            eventPoster.post(event)
         }
         return true
     }

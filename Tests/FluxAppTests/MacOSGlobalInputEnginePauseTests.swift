@@ -1,3 +1,4 @@
+import FluxCore
 import Testing
 @testable import FluxApp
 
@@ -9,11 +10,15 @@ import Testing
 /// manager is installed and no system permission is touched during tests.
 struct MacOSGlobalInputEnginePauseTests {
     @MainActor
-    private func makeEngine() -> MacOSGlobalInputEngine {
+    private func makeEngine(
+        configuration: FluxConfiguration = .default,
+        pointerController: MacOSPointerController = MacOSPointerController()
+    ) -> MacOSGlobalInputEngine {
         MacOSGlobalInputEngine(
             contextRuntime: MacOSContextRuntime(),
             focusController: MacOSFocusController(),
-            pointerController: MacOSPointerController()
+            pointerController: pointerController,
+            configuration: configuration
         )
     }
 
@@ -28,6 +33,26 @@ struct MacOSGlobalInputEnginePauseTests {
         // Pause menu disabled until a real start() succeeds.
         let engine = makeEngine()
         #expect(!engine.isRunning)
+    }
+
+    @Test @MainActor func disabledConfigurationStartsPaused() {
+        let engine = makeEngine(configuration: FluxConfiguration(enabled: false))
+        #expect(engine.isPaused)
+    }
+
+    @Test @MainActor func applyingConfigurationUpdatesPauseAndPointerSpeed() {
+        let pointerController = MacOSPointerController()
+        let engine = makeEngine(pointerController: pointerController)
+        var calls: [Bool] = []
+        engine.onPauseStateChange = { calls.append($0) }
+
+        engine.applyConfiguration(
+            FluxConfiguration(enabled: false, pointerSpeedMultiplier: 1.5)
+        )
+
+        #expect(engine.isPaused)
+        #expect(calls == [true])
+        #expect(pointerController.motionProfile == PointerMotionProfile.default.scaled(by: 1.5))
     }
 
     @Test @MainActor func setPausedIsIdempotentAndNotifiesOncePerTransition() {

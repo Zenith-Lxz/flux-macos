@@ -45,7 +45,7 @@ final class MacOSGlobalInputEngine {
 
     // MARK: - Routed state
 
-    private var router = InputRouter()
+    private var router: InputRouter
     private var modifierTracker = ModifierStateTracker()
 
     // MARK: - Lifecycle / pause
@@ -88,11 +88,35 @@ final class MacOSGlobalInputEngine {
     init(
         contextRuntime: MacOSContextRuntime,
         focusController: MacOSFocusController,
-        pointerController: MacOSPointerController
+        pointerController: MacOSPointerController,
+        configuration: FluxConfiguration = .default
     ) {
+        let configuration = configuration.sanitized()
         self.contextRuntime = contextRuntime
         self.focusController = focusController
         self.pointerController = pointerController
+        self.router = InputRouter(configuration: configuration)
+        self.isPaused = !configuration.enabled
+        pointerController.updateSpeedMultiplier(configuration.pointerSpeedMultiplier)
+    }
+
+    /// Applies one complete settings snapshot live. Routing and pointer
+    /// state are reset atomically on the main actor, and the master enabled
+    /// switch is represented by the same paused mode used by the menu and
+    /// keyboard escape hatch.
+    func applyConfiguration(_ configuration: FluxConfiguration) {
+        let configuration = configuration.sanitized()
+        let targetPaused = !configuration.enabled
+        let pauseChanged = isPaused != targetPaused
+        isPaused = targetPaused
+        router.updateConfiguration(configuration)
+        pointerController.updateSpeedMultiplier(configuration.pointerSpeedMultiplier)
+        modifierTracker.reset()
+        lastRawCapsState = nil
+        manualSuppressedKeys.removeAll()
+        if pauseChanged {
+            onPauseStateChange?(isPaused)
+        }
     }
 
     deinit {

@@ -46,6 +46,27 @@ struct PointerMotionProfileDefaultsTests {
     }
 }
 
+struct PointerMotionProfileScalingTests {
+    @Test func scalingChangesOnlyStepMagnitudes() {
+        let profile = PointerMotionProfile.default.scaled(by: 1.5)
+
+        #expect(profile.normalStep == 18)
+        #expect(profile.acceleratedStep == 36)
+        #expect(profile.maximumStep == 72)
+        #expect(profile.fastStep == 108)
+        #expect(profile.accelerationRepeatThreshold == 4)
+        #expect(profile.maximumRepeatThreshold == 12)
+        #expect(profile.resetInterval == 0.20)
+    }
+
+    @Test func scalingClampsToSettingsRangeAndRejectsNonFiniteValues() {
+        #expect(PointerMotionProfile.default.scaled(by: 0.1).normalStep == 6)
+        #expect(PointerMotionProfile.default.scaled(by: 9).normalStep == 24)
+        #expect(PointerMotionProfile.default.scaled(by: .nan) == .default)
+        #expect(PointerMotionProfile.default.scaled(by: .infinity) == .default)
+    }
+}
+
 // MARK: - First key down
 
 struct FirstKeyDownTests {

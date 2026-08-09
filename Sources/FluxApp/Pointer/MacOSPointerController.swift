@@ -40,6 +40,11 @@ final class MacOSPointerController {
     /// `resetMotion()` clears it.
     private var motionState: PointerMotionState
 
+    /// Stable unscaled profile. Runtime speed updates always derive from
+    /// this value, so repeated settings changes never compound rounding or
+    /// scale an already-scaled profile.
+    private let baseProfile: PointerMotionProfile
+
     /// The bounded Accessibility snapper (design spec §6). Constructed
     /// eagerly, but it performs no AX work until the first non-repeat move
     /// requests a snap point, so constructing the controller stays
@@ -54,8 +59,23 @@ final class MacOSPointerController {
         profile: PointerMotionProfile = .default,
         snapper: any PointerSnapping = MacOSPointerSnapper()
     ) {
+        self.baseProfile = profile
         self.motionState = PointerMotionState(profile: profile)
         self.snapper = snapper
+    }
+
+    /// Current effective profile, exposed internally for deterministic tests
+    /// and settings reconciliation without touching the window server.
+    var motionProfile: PointerMotionProfile {
+        motionState.profile
+    }
+
+    /// Applies the bounded settings multiplier and starts a fresh motion
+    /// sequence. Outstanding corrective snaps are invalidated as part of the
+    /// same state transition.
+    func updateSpeedMultiplier(_ multiplier: Double) {
+        motionState = PointerMotionState(profile: baseProfile.scaled(by: multiplier))
+        snapGeneration &+= 1
     }
 
     /// Moves the pointer one logical step in `direction`.

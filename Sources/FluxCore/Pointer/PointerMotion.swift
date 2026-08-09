@@ -76,6 +76,32 @@ public struct PointerMotionProfile: Sendable, Equatable, Hashable {
         self.resetInterval = Self.sanitizedStep(resetInterval, fallback: 0.20)
     }
 
+    /// Returns this profile with only its four movement magnitudes scaled.
+    /// The settings range is 0.5...2.0; non-finite multipliers fall back to
+    /// 1.0. Thresholds and timing remain unchanged so speed customization
+    /// cannot alter acceleration-state semantics.
+    public func scaled(by multiplier: Double) -> PointerMotionProfile {
+        let boundedMultiplier: Double
+        if multiplier.isFinite {
+            boundedMultiplier = min(max(multiplier, 0.5), 2.0)
+        } else {
+            boundedMultiplier = 1.0
+        }
+        func scaledStep(_ step: Double) -> Double {
+            let result = step * boundedMultiplier
+            return result.isFinite && result > 0 ? result : step
+        }
+        return PointerMotionProfile(
+            normalStep: scaledStep(normalStep),
+            acceleratedStep: scaledStep(acceleratedStep),
+            maximumStep: scaledStep(maximumStep),
+            fastStep: scaledStep(fastStep),
+            accelerationRepeatThreshold: accelerationRepeatThreshold,
+            maximumRepeatThreshold: maximumRepeatThreshold,
+            resetInterval: resetInterval
+        )
+    }
+
     /// A finite positive value, or the fallback.
     private static func sanitizedStep(_ value: Double, fallback: Double) -> Double {
         value.isFinite && value > 0 ? value : fallback

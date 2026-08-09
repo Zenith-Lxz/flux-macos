@@ -1,4 +1,5 @@
 import CoreGraphics
+import FluxCore
 import Testing
 @testable import FluxApp
 
@@ -69,5 +70,13 @@ struct MacOSPointerControllerSnapTests {
         let controller = MacOSPointerController()
         controller.resetMotion()
         #expect(controller.snapTarget(geometricTarget: .zero, isRepeat: true) == nil)
+    }
+
+    @Test @MainActor func speedUpdateReplacesProfileAndResetsMotion() {
+        let controller = MacOSPointerController()
+
+        controller.updateSpeedMultiplier(1.5)
+
+        #expect(controller.motionProfile == PointerMotionProfile.default.scaled(by: 1.5))
     }
 }

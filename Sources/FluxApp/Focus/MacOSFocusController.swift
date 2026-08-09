@@ -128,15 +128,17 @@ final class MacOSFocusController {
         }
 
         let pid = frontmost.processIdentifier
-        let application = AXUIElementCreateApplication(pid)
-        let timeoutError = AXUIElementSetMessagingTimeout(application, messagingTimeout)
+        // AXUIElementSetMessagingTimeout applies only to the exact element
+        // passed to it. Setting it on the system-wide element configures the
+        // process-global timeout, which is required to bound the descendant
+        // window/control reads below (Apple Accessibility contract).
+        let systemWide = AXUIElementCreateSystemWide()
+        let timeoutError = AXUIElementSetMessagingTimeout(systemWide, messagingTimeout)
         guard timeoutError == .success else {
-            // Log only the AXError raw code (constant state plus an error
-            // code, design spec §8); never the timeout value or element
-            // content. Fail before any tree query.
-            NSLog("Flux: focus move unavailable: messaging timeout not applied (ax %d)", timeoutError.rawValue)
+            NSLog("Flux: focus move unavailable: global messaging timeout not applied (ax %d)", timeoutError.rawValue)
             return false
         }
+        let application = AXUIElementCreateApplication(pid)
 
         // Source frames: the focused UI element when valid, otherwise the
         // focused window frame; neither valid means no navigation.

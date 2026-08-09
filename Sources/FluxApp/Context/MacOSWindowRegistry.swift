@@ -94,6 +94,7 @@ final class MacOSWindowRegistry {
     }
 
     private let maxEntryCount: Int
+    private let messagingTimeout: Float
     private let focusedWindowProvider: @MainActor (Int32) -> AXUIElement?
     private let windowOperationProvider: @MainActor (AXUIElement) -> [AXError]
 
@@ -114,6 +115,7 @@ final class MacOSWindowRegistry {
     ) {
         self.maxEntryCount = max(1, maxEntryCount)
         let timeout = Self.clampedMessagingTimeout(messagingTimeout)
+        self.messagingTimeout = timeout
         self.focusedWindowProvider = focusedWindowProvider ?? { pid in
             Self.readFocusedWindow(for: pid, timeout: timeout)
         }
@@ -180,6 +182,16 @@ final class MacOSWindowRegistry {
     func restore(identifier: String, for pid: Int32) -> WindowRestoreResult {
         guard let entry = entries[identifier] else { return .notFound }
         guard entry.pid == pid else { return .pidMismatch }
+
+        // A timeout set on an application AX element does not propagate to
+        // its windows. Configure the system-wide element so the restore
+        // operations on the retained child element use the bounded global
+        // timeout for this process.
+        let systemWide = AXUIElementCreateSystemWide()
+        let timeoutError = AXUIElementSetMessagingTimeout(systemWide, messagingTimeout)
+        guard timeoutError == .success else {
+            return .axFailed(timeoutError.rawValue)
+        }
 
         var elementPid: pid_t = 0
         guard AXUIElementGetPid(entry.element, &elementPid) == .success,
@@ -301,10 +313,11 @@ final class MacOSWindowRegistry {
         for pid: Int32,
         timeout: Float
     ) -> AXUIElement? {
-        let application = AXUIElementCreateApplication(pid)
-        guard AXUIElementSetMessagingTimeout(application, timeout) == .success else {
+        let systemWide = AXUIElementCreateSystemWide()
+        guard AXUIElementSetMessagingTimeout(systemWide, timeout) == .success else {
             return nil
         }
+        let application = AXUIElementCreateApplication(pid)
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
             application,

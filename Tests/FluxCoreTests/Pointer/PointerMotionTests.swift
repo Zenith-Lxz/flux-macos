@@ -101,7 +101,7 @@ struct RepeatThresholdTests {
         var timestamp = 0.0
         _ = state.delta(direction: .right, fast: false, isRepeat: false, timestamp: timestamp)
         var seen: [PointerDelta] = []
-        for i in 1...14 {
+        for _ in 1...14 {
             timestamp += 0.01
             seen.append(state.delta(direction: .right, fast: false, isRepeat: true, timestamp: timestamp))
         }

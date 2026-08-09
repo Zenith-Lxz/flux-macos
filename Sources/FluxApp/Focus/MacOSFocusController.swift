@@ -4,10 +4,12 @@
 // Accessibility tree of the frontmost application: reads only geometry and
 // structural attributes from the focused window's descendants, scores the
 // candidates with the platform-neutral SpatialNavigator, and applies the
-// winner's AXFocused attribute. The controller requests no permissions and
-// presents no UI; when Accessibility is unavailable it fails closed and logs
-// only constant state plus AXError codes (design spec §8: diagnostic logs
-// never carry private content).
+// winner's AXFocused attribute, then briefly highlights the winner with a
+// transient, non-activating focus ring around its raw AX frame (design spec
+// §5). The controller requests no permissions and touches the window server
+// only after a successful move; when Accessibility is unavailable it fails
+// closed and logs only constant state plus AXError codes (design spec §8:
+// diagnostic logs never carry private content).
 //
 // Privacy boundary (design spec §4, §8): this controller reads only role,
 // children, position, size, hidden, enabled, supported action names, and
@@ -81,6 +83,11 @@ final class MacOSFocusController {
     /// Per-application AX messaging timeout in seconds.
     private let messagingTimeout: Float
 
+    /// Drives the transient focus ring; the panel is created lazily on the
+    /// first successful move, so constructing the controller never touches
+    /// the window server (permission-free tests stay side-effect free).
+    private let focusRingPresenter = FocusRingPresenter()
+
     init(maxElementCount: Int = 2_000, messagingTimeout: Float = 0.15) {
         // Clamp to at least one element; the timeout is normalized by
         // clampedMessagingTimeout so the global input can never inherit an
@@ -151,6 +158,7 @@ final class MacOSFocusController {
         // remembered as the exact source.
         var candidates: [SpatialCandidate] = []
         var elementsByID: [String: AXUIElement] = [:]
+        var rawFramesByID: [String: CGRect] = [:]
         var focusedCandidate: SpatialCandidate?
         var visitedByHash: [UInt: [AXUIElement]] = [:]
         var index = 0
@@ -194,7 +202,8 @@ final class MacOSFocusController {
             }
 
             guard isEligible(element, role: role),
-                  let elementFrame = frame(of: element) else { continue }
+                  let rawFrame = rawFrame(of: element),
+                  let elementFrame = spatialFrame(fromRawAXFrame: rawFrame) else { continue }
 
             let identifier = "\(pid)-\(traversalIndex)"
             let candidate = SpatialCandidate(
@@ -208,6 +217,9 @@ final class MacOSFocusController {
             )
             candidates.append(candidate)
             elementsByID[identifier] = element
+            // Raw AX frame kept only for this move: the ring presenter
+            // converts it immediately and never retains it.
+            rawFramesByID[identifier] = rawFrame
             if let focusedElement, CFEqual(element, focusedElement) {
                 focusedCandidate = candidate
             }
@@ -245,6 +257,11 @@ final class MacOSFocusController {
         guard error == .success else {
             NSLog("Flux: focus move failed: set focused attribute error (ax %d)", error.rawValue)
             return false
+        }
+        // The ring appears only after the AX focus move succeeded (design
+        // spec §5); invalid geometry fails closed without showing.
+        if let rawFrame = rawFramesByID[target.identifier] {
+            focusRingPresenter.show(axFrame: rawFrame)
         }
         return true
     }
@@ -328,15 +345,32 @@ final class MacOSFocusController {
     /// nonfinite or when derived values overflow, so a pathological
     /// position/size combination can never feed the navigator.
     private func frame(of element: AXUIElement) -> SpatialRect? {
+        guard let raw = rawFrame(of: element) else { return nil }
+        return spatialFrame(fromRawAXFrame: raw)
+    }
+
+    /// The element's raw AX frame as a CGRect in Quartz screen coordinates
+    /// (top-left origin, y downward), or nil when the position/size
+    /// attributes are missing or the frame is invalid. This is the geometry
+    /// the transient focus ring shows (design spec §5); the controller
+    /// retains it only for the duration of one move.
+    private func rawFrame(of element: AXUIElement) -> CGRect? {
         guard let position = pointAttribute(element, kAXPositionAttribute as CFString),
               let size = sizeAttribute(element, kAXSizeAttribute as CFString) else {
             return nil
         }
+        let raw = CGRect(x: position.x, y: position.y, width: size.width, height: size.height)
+        return raw.isFinitePositive ? raw : nil
+    }
+
+    /// Normalizes a raw AX frame into Flux spatial coordinates (see
+    /// `frame(of:)`), or nil when the derived SpatialRect is invalid.
+    private func spatialFrame(fromRawAXFrame raw: CGRect) -> SpatialRect? {
         let frame = SpatialRect(
-            x: position.x,
-            y: -(position.y + size.height),
-            width: size.width,
-            height: size.height
+            x: raw.minX,
+            y: -(raw.minY + raw.height),
+            width: raw.width,
+            height: raw.height
         )
         return frame.isValid ? frame : nil
     }

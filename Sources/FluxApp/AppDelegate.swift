@@ -13,6 +13,13 @@ import FluxCore
 /// explanatory alert only offers them through its authorization button.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    // MARK: - Configuration
+
+    private let configurationStore: FluxConfigurationStore
+    private var configuration: FluxConfiguration
+    private let configurationLoadSource: ConfigurationSource
+    private var isApplyingConfiguration = false
+
     // MARK: - Owned controllers
 
     private let contextRuntime = MacOSContextRuntime()
@@ -20,13 +27,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let pointerController = MacOSPointerController()
     private let permissionController = MacOSPermissionController()
     private let loginItemController = MacOSLoginItemController()
+    private var settingsWindowController: FluxSettingsWindowController?
 
     /// The input engine is created lazily: construction has no side
     /// effects, and `start()` is called only when permissions are ready.
     private lazy var inputEngine = MacOSGlobalInputEngine(
         contextRuntime: contextRuntime,
         focusController: focusController,
-        pointerController: pointerController
+        pointerController: pointerController,
+        configuration: configuration
     )
 
     // MARK: - Status / polling state
@@ -48,9 +57,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// UserDefaults key for the one-time first-launch permission alert.
     private static let onboardingPermissionAlertKey = "FluxOnboardingPermissionAlertPresented"
 
+    override init() {
+        let store = FluxConfigurationStore(fileURL: FluxConfigurationStore.defaultFileURL())
+        let loadResult = store.load()
+        self.configurationStore = store
+        self.configuration = loadResult.configuration
+        self.configurationLoadSource = loadResult.source
+        super.init()
+    }
+
     // MARK: - NSApplicationDelegate
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        logConfigurationFallbackIfNeeded()
         contextRuntime.start()
         installStatusItem()
         inputEngine.onPauseStateChange = { [weak self] _ in
@@ -153,6 +172,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch entry {
         case .pause:
             inputEngine.togglePaused()
+        case .settings:
+            showSettings()
         case .permissions:
             permissionController.requestAndOpenRelevantSettings()
             refreshPermissionState()
@@ -198,6 +219,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         updateStatusItem(snapshot: snapshot)
         updatePauseMenuItem()
+        refreshSettingsWindow()
     }
 
     /// Logs the engine start failure exactly once per failure episode. The
@@ -236,8 +258,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - Pause
 
     private func pauseStateDidChange() {
+        if !isApplyingConfiguration {
+            configuration.enabled = !inputEngine.isPaused
+            do {
+                try configurationStore.save(configuration)
+            } catch {
+                logConfigurationSaveFailure(error)
+            }
+        }
         updatePauseMenuItem()
         updateStatusItem(snapshot: permissionController.snapshot())
+        refreshSettingsWindow()
     }
 
     private func updatePauseMenuItem() {
@@ -271,22 +302,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item.state = .off
             item.title = FluxMenuEntry.launchAtLogin.title
         }
+        refreshSettingsWindow()
     }
 
     private func toggleLaunchAtLogin() {
-        let result = loginItemController.toggle()
-        switch result {
+        switch performLaunchAtLoginToggle() {
         case .success:
-            refreshLoginItemState()
-        case .failure(let error):
-            let nsError = error as NSError
-            // Log only the error domain and code; the full error may embed
-            // local paths or private metadata (design spec §8).
-            NSLog(
-                "Flux: launch at login toggle failed (domain: %@, code: %ld)",
-                nsError.domain,
-                nsError.code
-            )
+            break
+        case .failure:
             let alert = NSAlert()
             alert.alertStyle = .warning
             alert.messageText = "开机启动设置失败"
@@ -294,6 +317,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             alert.addButton(withTitle: "好")
             alert.runModal()
         }
+    }
+
+    private func performLaunchAtLoginToggle() -> Result<SettingsLaunchAtLoginState, Error> {
+        switch loginItemController.toggle() {
+        case .success:
+            refreshLoginItemState()
+            return .success(settingsLaunchAtLoginState())
+        case .failure(let error):
+            logLaunchAtLoginFailure(error)
+            return .failure(error)
+        }
+    }
+
+    private func logLaunchAtLoginFailure(_ error: Error) {
+        let nsError = error as NSError
+        // Log only the error domain and code; the full error may embed local
+        // paths or private metadata (design spec §8).
+        NSLog(
+            "Flux: launch at login toggle failed (domain: %@, code: %ld)",
+            nsError.domain,
+            nsError.code
+        )
     }
 
     // MARK: - First-launch onboarding
@@ -326,7 +371,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// The frozen v1 shortcut list (design spec §3.1, §3.2, §3.3, §8).
     /// Shown in a restrained native alert; no overlay or custom panel.
     private static let shortcutList = """
-        单击 Caps：返回上一个应用
+        单击 Caps：返回上一个位置
         Caps + 方向键：移动界面焦点
         Caps + Option + 方向键：移动指针（长按加速，+ Shift 快速）
         Caps + Option + Return：单击；Caps + Option + Shift + Return：双击
@@ -346,4 +391,104 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.addButton(withTitle: "好")
         alert.runModal()
     }
+
+    // MARK: - Settings and configuration persistence
+
+    private func showSettings() {
+        let controller: FluxSettingsWindowController
+        if let existing = settingsWindowController {
+            controller = existing
+        } else {
+            controller = FluxSettingsWindowController(
+                onApplyConfiguration: { [weak self] configuration in
+                    guard let self else {
+                        return .failure(FluxSettingsError.applicationUnavailable)
+                    }
+                    return self.persistAndApplyConfiguration(configuration)
+                },
+                onOpenPermissions: { [weak self] in
+                    guard let self else { return }
+                    self.permissionController.requestAndOpenRelevantSettings()
+                    self.refreshPermissionState()
+                },
+                onToggleLaunchAtLogin: { [weak self] in
+                    guard let self else {
+                        return .failure(FluxSettingsError.applicationUnavailable)
+                    }
+                    return self.performLaunchAtLoginToggle()
+                }
+            )
+            settingsWindowController = controller
+        }
+        controller.present(
+            configuration: configuration,
+            permissionSnapshot: permissionController.snapshot(),
+            launchAtLoginState: settingsLaunchAtLoginState()
+        )
+    }
+
+    private func persistAndApplyConfiguration(
+        _ proposed: FluxConfiguration
+    ) -> Result<FluxConfiguration, Error> {
+        let sanitized = proposed.sanitized()
+        do {
+            try configurationStore.save(sanitized)
+        } catch {
+            logConfigurationSaveFailure(error)
+            return .failure(error)
+        }
+
+        configuration = sanitized
+        isApplyingConfiguration = true
+        inputEngine.applyConfiguration(sanitized)
+        isApplyingConfiguration = false
+        updatePauseMenuItem()
+        updateStatusItem(snapshot: permissionController.snapshot())
+        return .success(sanitized)
+    }
+
+    private func refreshSettingsWindow() {
+        settingsWindowController?.refresh(
+            configuration: configuration,
+            permissionSnapshot: permissionController.snapshot(),
+            launchAtLoginState: settingsLaunchAtLoginState()
+        )
+    }
+
+    private func settingsLaunchAtLoginState() -> SettingsLaunchAtLoginState {
+        switch loginItemController.status {
+        case .enabled:
+            return .on
+        case .requiresApproval:
+            return .pendingApproval
+        case .notRegistered, .notFound:
+            return .off
+        @unknown default:
+            return .off
+        }
+    }
+
+    private func logConfigurationFallbackIfNeeded() {
+        switch configurationLoadSource {
+        case .currentFile, .migratedV0, .missingDefault:
+            break
+        case .corruptDefault:
+            NSLog("Flux: configuration is corrupt; using built-in defaults")
+        case .unsupportedFutureVersionDefault:
+            NSLog("Flux: configuration version is unsupported; using built-in defaults")
+        }
+    }
+
+    private func logConfigurationSaveFailure(_ error: Error) {
+        let nsError = error as NSError
+        NSLog(
+            "Flux: configuration save failed (domain: %@, code: %ld)",
+            nsError.domain,
+            nsError.code
+        )
+    }
+}
+
+private enum FluxSettingsError: Error {
+    case applicationUnavailable
 }

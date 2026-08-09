@@ -11,15 +11,15 @@ public struct FluxConfiguration: Codable, Sendable, Equatable {
     public static let currentSchemaVersion = 1
 
     /// Schema version of the encoded document.
-    public let schemaVersion: Int
+    public var schemaVersion: Int
     /// Master switch; when false Flux leaves the keyboard untouched.
-    public let enabled: Bool
+    public var enabled: Bool
     /// Bundle identifiers for the eight direct-launch targets.
-    public let applications: Applications
+    public var applications: Applications
     /// Per-mapping switches.
-    public let mappings: Mappings
+    public var mappings: Mappings
     /// Pointer fallback speed multiplier, clamped to 0.5...2.0.
-    public let pointerSpeedMultiplier: Double
+    public var pointerSpeedMultiplier: Double
 
     public init(
         schemaVersion: Int = FluxConfiguration.currentSchemaVersion,
@@ -65,14 +65,14 @@ extension FluxConfiguration {
     /// Bundle identifiers for the eight `Caps + Command + letter` targets.
     /// Defaults mirror the frozen `AppBundleIdentifier` raw values.
     public struct Applications: Codable, Sendable, Equatable {
-        public let ares: String?
-        public let codex: String?
-        public let chrome: String?
-        public let wechat: String?
-        public let lark: String?
-        public let wps: String?
-        public let hermes: String?
-        public let finder: String?
+        public var ares: String?
+        public var codex: String?
+        public var chrome: String?
+        public var wechat: String?
+        public var lark: String?
+        public var wps: String?
+        public var hermes: String?
+        public var finder: String?
 
         public init(
             ares: String? = AppBundleIdentifier.ares.rawValue,
@@ -99,14 +99,14 @@ extension FluxConfiguration {
 
     /// Per-mapping switches (design spec §3.3). All default to enabled.
     public struct Mappings: Codable, Sendable, Equatable {
-        public let capsTextNavigationEnabled: Bool
-        public let capsEditingEnabled: Bool
-        public let capsInputSourceEnabled: Bool
-        public let chromeTabEnabled: Bool
-        public let leftControlAsCommandEnabled: Bool
-        public let leftControlMAsReturnEnabled: Bool
-        public let commandEToCommandMEnabled: Bool
-        public let legacyTerminalCopyEnabled: Bool
+        public var capsTextNavigationEnabled: Bool
+        public var capsEditingEnabled: Bool
+        public var capsInputSourceEnabled: Bool
+        public var chromeTabEnabled: Bool
+        public var leftControlAsCommandEnabled: Bool
+        public var leftControlMAsReturnEnabled: Bool
+        public var commandEToCommandMEnabled: Bool
+        public var legacyTerminalCopyEnabled: Bool
 
         public init(
             capsTextNavigationEnabled: Bool = true,

@@ -874,6 +874,21 @@ struct InputRouterConfigurationTests {
         )
     }
 
+    @Test func disabledCapsInputSourceEmitsOrdinarySpace() {
+        var router = InputRouter(
+            configuration: FluxConfiguration(
+                mappings: .init(capsInputSourceEnabled: false)
+            )
+        )
+
+        #expect(capsDown(&router) == .suppress)
+        #expect(keyDown(&router, key: .space) == emit(.space, []))
+        #expect(
+            keyDown(&router, key: .space, modifiers: [.leftShift])
+                == emit(.space, [.leftShift])
+        )
+    }
+
     @Test func nonCapsMappingsCanBeDisabledIndependently() {
         var router = InputRouter(
             configuration: FluxConfiguration(

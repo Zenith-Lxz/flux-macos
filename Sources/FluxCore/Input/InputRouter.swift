@@ -273,6 +273,13 @@ public struct InputRouter: Sendable {
                 return .emit(SyntheticKeyStroke(key: .backspace, modifiers: []))
             case .o where configuration.mappings.capsEditingEnabled:
                 return .emit(SyntheticKeyStroke(key: .returnKey, modifiers: []))
+            case .space where configuration.mappings.capsInputSourceEnabled:
+                return .emit(SyntheticKeyStroke(key: .space, modifiers: [.rightControl]))
+            case .space:
+                // Turning the dedicated input-source mapping off must make
+                // the setting observable; emit an ordinary Space instead of
+                // falling into the generic Right-Control passthrough.
+                return .emit(SyntheticKeyStroke(key: .space, modifiers: modifiers))
             case .escape:
                 return .emit(SyntheticKeyStroke(key: .escape, modifiers: []))
             case .tab where configuration.mappings.chromeTabEnabled:

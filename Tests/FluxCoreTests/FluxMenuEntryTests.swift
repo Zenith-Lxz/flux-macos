@@ -7,6 +7,7 @@ struct FluxMenuEntryTests {
     @Test func displayOrderMatchesFrozenDesign() {
         #expect(FluxMenuEntry.allCases.map(\.title) == [
             "暂停 Flux",
+            "设置…",
             "打开权限设置",
             "开机启动",
             "显示快捷键",
@@ -23,6 +24,7 @@ struct FluxMenuEntryTests {
         // these identifiers to wire menu items, so they must stay stable.
         #expect(FluxMenuEntry.allCases.map(\.rawValue) == [
             "pause",
+            "settings",
             "permissions",
             "launchAtLogin",
             "showShortcuts",
